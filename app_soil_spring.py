@@ -6,7 +6,7 @@ from io import BytesIO
 
 st.set_page_config(page_title="Pile Soil Spring Calculator", layout="wide", page_icon="🏗️")
 
-VERSION = 6
+VERSION = 7
 if 'version' not in st.session_state or st.session_state.version < VERSION:
     st.session_state.clear()
     st.session_state.version = VERSION
@@ -32,7 +32,7 @@ SOIL_DB = {
     }
 }
 
-# Predefined Soil Profiles
+# Predefined Soil Profiles for Bangkok Area
 SOIL_PROFILES = {
     "กรุงเทพฯ - โปรไฟล์ทั่วไป (General)": pd.DataFrame([
         {"Depth_From": 0.0,  "Depth_To": 2.0,  "Soil_Type": "Clay", "Consistency": "Soft",         "SPT_N": 3,  "Es":  3000, "cu": 15,  "phi": 0, "Gamma": 16.0},
@@ -73,14 +73,20 @@ PMULT_TABLE = {
 #  ENGINEERING FUNCTIONS
 # ─────────────────────────────────────────────
 def get_alpha_clay(N):
+    """Get alpha factor for clay based on N-SPT (Bowles 1997)"""
     if N <= 1:   return 12
     elif N <= 4:  return 24
     elif N <= 8:  return 48
     elif N <= 15: return 96
-    elif N <= 30: return 150  # FIXED: Adjusted from 192 to be more realistic for Hard Clay
-    else:         return 200  # FIXED: Adjusted from 384
+    elif N <= 30: return 150
+    else:         return 200
 
 def calc_kh_jra(N, D, design_stage, soil_type, below_water):
+    """
+    JRA (Japan Road Association) - E0 = 2800N (Normal) or 5600N (Seismic)
+    kh = (E0/B0) × (D/B0)^(-3/4), B0 = 0.3 m
+    Sand below water: E0 × 0.6
+    """
     B0 = 0.3
     E0_factor = 5600 if design_stage == "Seismic" else 2800
     E0 = E0_factor * N
@@ -90,11 +96,17 @@ def calc_kh_jra(N, D, design_stage, soil_type, below_water):
     return kh, E0
 
 def get_nh_terzaghi(N, below_water):
+    """Terzaghi (1955) nh values for sand [kN/m³/m]"""
     if N < 10:   return 4000  if below_water else 7000
     elif N < 30: return 12000 if below_water else 21000
     else:        return 34000 if below_water else 56000
 
 def calc_kh_terzaghi(N, soil_type, D, z_mid, below_water, consistency="Medium Stiff"):
+    """
+    Terzaghi (1955) / Bowles (1997)
+    Sand: kh = nh × z / D
+    Clay: kh = α × cu / D
+    """
     if soil_type == "Sand":
         nh = get_nh_terzaghi(N, below_water)
         z_use = max(z_mid, 0.1)
@@ -106,6 +118,10 @@ def calc_kh_terzaghi(N, soil_type, D, z_mid, below_water, consistency="Medium St
     return kh
 
 def calc_kh_vesic(Es_kPa, D, Ep, Ip, nu=0.35):
+    """
+    Vesic (1961) - Beam on elastic foundation
+    kh = 0.65 × (Es·D⁴/Ep·Ip)^(1/12) × Es/(D·(1-ν²))
+    """
     Es = float(Es_kPa)
     if Ep * Ip <= 0 or Es <= 0 or D <= 0:
         return 0.0
@@ -113,6 +129,11 @@ def calc_kh_vesic(Es_kPa, D, Ep, Ip, nu=0.35):
     return kh
 
 def calc_kh_broms(soil_type, N, z, D, gamma_eff=8, phi=None, cu=None):
+    """
+    Broms (1964) - Ultimate lateral resistance method
+    Sand: pu = 3·Kp·γ·z·D
+    Clay: pu = 9·cu·D
+    """
     y_ref = 0.01 * D
     z_use = max(z, 0.1)
     if soil_type == "Sand":
@@ -127,6 +148,7 @@ def calc_kh_broms(soil_type, N, z, D, gamma_eff=8, phi=None, cu=None):
     return kh, pu
 
 def calc_pmultiplier(s_D_ratio, row_pos):
+    """AASHTO LRFD Table 10.7.2.4-1 p-multiplier by interpolation"""
     t = PMULT_TABLE[row_pos]
     keys = sorted(t.keys())
     if s_D_ratio <= keys[0]:  return t[keys[0]]
@@ -134,6 +156,7 @@ def calc_pmultiplier(s_D_ratio, row_pos):
     return float(np.interp(s_D_ratio, keys, [t[k] for k in keys]))
 
 def calc_pile_props(pile_type, D, B, H, fc):
+    """Concrete pile properties. Ep = 4700√fc [MPa] → kN/m²"""
     Ep = 4700 * np.sqrt(fc) * 1000
     if pile_type == "Round":
         Ap = np.pi * D**2 / 4
@@ -150,6 +173,7 @@ def calc_pile_props(pile_type, D, B, H, fc):
     return Ap, Ipx, Ipy, Ep, Deq_x, Deq_y
 
 def calc_kv_tip(N_tip, D, Ap, design_stage):
+    """Vertical tip spring (JRA-based) - kv = lateral/3"""
     B0 = 0.3
     E0_factor = 5600 if design_stage == "Seismic" else 2800
     E0 = E0_factor * N_tip
@@ -158,6 +182,7 @@ def calc_kv_tip(N_tip, D, Ap, design_stage):
     return Kv_tip, kv
 
 def draw_spring(x0, x1, y, n_coils=7):
+    """Zigzag spring symbol between x0 and x1 at depth y"""
     length = abs(x1 - x0)
     dx = length / (n_coils * 4)
     xs = [x0]
@@ -168,6 +193,7 @@ def draw_spring(x0, x1, y, n_coils=7):
     return xs, ys
 
 def pile_section_figure(pile_type, D, B, H, Ap, Ipx, Ipy, Ep, compact=False):
+    """Pile cross-section figure with dimension annotations"""
     fig = go.Figure()
     pad = max(D, B, H) * 0.7
     dim_offset = max(D, B, H) * 0.35
@@ -218,6 +244,123 @@ def pile_section_figure(pile_type, D, B, H, Ap, Ipx, Ipy, Ep, compact=False):
                       yaxis=dict(range=[-lim, lim], zeroline=False, showgrid=True, gridcolor='rgba(180,180,180,0.3)'),
                       height=h, margin=dict(l=10, r=10, t=40, b=10), plot_bgcolor='rgba(245,248,255,0.8)')
     return fig
+
+def calculate_rebar_params(df_results, Ap):
+    """Calculate rebar design parameters"""
+    kh_max_surface = df_results["kh_x [kN/m³]"].iloc[1] if len(df_results) > 1 else 0
+    kh_min_deep = df_results["kh_x [kN/m³]"].iloc[-1] if len(df_results) > 0 else 0
+
+    if kh_max_surface <= 5000:
+        as_ratio_rec = 0.015  # 1.5% for Soft Clay
+    elif kh_max_surface <= 15000:
+        as_ratio_rec = 0.010  # 1.0% for Medium Stiff Clay
+    else:
+        as_ratio_rec = 0.008  # 0.8% for Stiff Clay / Sand
+
+    As_min = Ap * as_ratio_rec
+    return kh_max_surface, kh_min_deep, as_ratio_rec, As_min
+
+def build_excel(df_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
+                node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta,
+                kh_max_surface, kh_min_deep, as_ratio_rec, As_min):
+    """Build Excel file with all calculation results"""
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
+        wb = writer.book
+        fmt_title  = wb.add_format({'bold': True, 'font_size': 12, 'bg_color': '#1a4f8a', 'font_color': 'white', 'border': 1})
+        fmt_header = wb.add_format({'bold': True, 'bg_color': '#BDD7EE', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+        fmt_num    = wb.add_format({'num_format': '#,##0.00', 'border': 1})
+        fmt_bold   = wb.add_format({'bold': True, 'border': 1})
+        fmt_info   = wb.add_format({'italic': True, 'font_color': '#555555'})
+
+        # ── Sheet 1: Lateral Springs ──
+        ws1 = wb.add_worksheet("Lateral Springs")
+        ws1.write(0, 0, f"Lateral Soil Spring Stiffness — Method: {method}", fmt_title)
+        ws1.write(1, 0, f"Pile: B={B:.2f}m H={H:.2f}m L={L:.1f}m f'c={fc:.0f}MPa ΔL={node_spacing:.2f}m p-mult={Pmult:.3f}", fmt_info)
+        headers = list(df_results.columns)
+        for ci, h in enumerate(headers):
+            ws1.write(3, ci, h, fmt_header)
+        for ri, row in df_results.iterrows():
+            for ci, val in enumerate(row):
+                if isinstance(val, float) and not np.isnan(val):
+                    ws1.write(4+ri, ci, val, fmt_num)
+                else:
+                    ws1.write(4+ri, ci, val if not (isinstance(val, float) and np.isnan(val)) else '', fmt_num)
+        ws1.set_column(0, len(headers)-1, 15)
+
+        # ── Sheet 2: Vertical Tip Spring ──
+        ws2 = wb.add_worksheet("Vertical Tip Spring")
+        ws2.write(0, 0, "Vertical Tip Spring Stiffness", fmt_title)
+        tip_data = [
+            ("Parameter", "Value", "Unit"),
+            ("N-SPT at pile tip", N_tip, "blow/30cm"),
+            ("E0 (at tip)", (2800 if design_stage=="Normal" else 5600)*N_tip, "kN/m²"),
+            ("Pile tip area Ap", Ap, "m²"),
+            ("Kv_tip (vertical spring)", round(Kv_tip, 1), "kN/m"),
+            ("Design Stage", design_stage, "-"),
+        ]
+        for ri, row in enumerate(tip_data):
+            for ci, val in enumerate(row):
+                ws2.write(2+ri, ci, val, fmt_bold if ci==0 else (fmt_num if isinstance(val, (int, float)) else fmt_bold))
+        ws2.set_column(0, 0, 28)
+        ws2.set_column(1, 1, 18)
+        ws2.set_column(2, 2, 12)
+
+        # ── Sheet 3: Summary ──
+        ws3 = wb.add_worksheet("Summary")
+        ws3.write(0, 0, "Project Summary & Pile Properties", fmt_title)
+        summary = [
+            ("Pile Width B [m]", B, "m"),
+            ("Pile Height H [m]", H, "m"),
+            ("Pile Length L [m]", L, "m"),
+            ("f'c [MPa]", fc, "MPa"),
+            ("Ep [kN/m²]", round(Ep, 0), "kN/m²"),
+            ("Ap [m²]", round(Ap, 5), "m²"),
+            ("Ix (Bending about X) [m⁴]", round(Ipx, 6), "m⁴"),
+            ("Iy (Bending about Y) [m⁴]", round(Ipy, 6), "m⁴"),
+            ("Node Spacing ΔL [m]", node_spacing, "m"),
+            ("kh Method", method, "-"),
+            ("Design Stage", design_stage, "-"),
+            ("Water Table [m]", water_table, "m"),
+            ("Scour Depth [m]", scour_depth, "m"),
+            ("p-multiplier", Pmult, "-"),
+            ("β (Characteristic Length) [1/m]", round(beta, 4), "1/m"),
+            ("Kv_tip [kN/m]", round(Kv_tip, 1), "kN/m"),
+        ]
+        for ri, (k, v, u) in enumerate(summary):
+            ws3.write(2+ri, 0, k, fmt_bold)
+            ws3.write(2+ri, 1, v, fmt_num if isinstance(v, float) else fmt_bold)
+            ws3.write(2+ri, 2, u, fmt_bold)
+        ws3.set_column(0, 0, 34)
+        ws3.set_column(1, 1, 18)
+        ws3.set_column(2, 2, 10)
+
+        # ── Sheet 4: Soil Profile ──
+        df_soil.to_excel(writer, sheet_name="Soil Profile", index=False)
+        ws4 = writer.sheets["Soil Profile"]
+        ws4.set_column(0, len(df_soil.columns)-1, 15)
+
+        # ── Sheet 5: Rebar Design Guide ──
+        ws5 = wb.add_worksheet("Rebar Design Guide")
+        ws5.write(0, 0, "Pile Reinforcement Design Guide (Based on Spring Results)", fmt_title)
+        rebar_data = [
+            ("Parameter", "Value", "Remark / Reference"),
+            ("Surface kh_x [kN/m³]", round(kh_max_surface, 1), "Used to evaluate soil stiffness condition"),
+            ("Deep kh_x [kN/m³]", round(kh_min_deep, 1), "Stiffness at pile tip layer"),
+            ("Recommended As Ratio", f"{as_ratio_rec*100:.1f}%", "Based on Crack Control / ACI 318"),
+            ("Minimum As [m²]", round(As_min, 4), "As = Ap x Ratio"),
+            ("Min. Rebar Requirement", "See ACI 10.5.1 & 21.6", "Max of Code min. or Crack control min."),
+        ]
+        for ri, row in enumerate(rebar_data):
+            for ci, val in enumerate(row):
+                fmt_use = fmt_bold if ci==0 else fmt_num if isinstance(val, (int, float)) else fmt_info
+                ws5.write(2+ri, ci, val, fmt_use)
+        ws5.set_column(0, 0, 32)
+        ws5.set_column(1, 1, 20)
+        ws5.set_column(2, 2, 50)
+
+    buf.seek(0)
+    return buf.read()
 
 # ─────────────────────────────────────────────
 #  SESSION STATE & DEFAULTS
@@ -281,19 +424,19 @@ if use_group:
     nx = gc1.number_input("Piles in X", 1, 20, 3, 1, key="nx")
     ny = gc2.number_input("Piles in Y", 1, 20, 3, 1, key="ny")
     n_total = int(nx * ny)
-    
+
     def fm_row_list(n_piles, s_over_D):
         fms = []
         for i in range(n_piles):
             pos = "Lead Row" if i == 0 else ("2nd Row" if i == 1 else "3rd Row+")
             fms.append(calc_pmultiplier(s_over_D, pos))
         return fms
-        
+
     fms_x = fm_row_list(int(nx), s_D)
     fms_y = fm_row_list(int(ny), s_D)
     fm_vals = [min(fms_x[ix], fms_y[iy]) for iy in range(int(ny)) for ix in range(int(nx))]
     Pmult = sum(fm_vals) / n_total if n_total > 0 else 1.0
-    
+
     if s_D >= 6.0:
         st.sidebar.success("s/D ≥ 6 → fm = 1.00 (no reduction)")
         Pmult = 1.0
@@ -318,19 +461,6 @@ else:
 pile_is_round = (pile_type == "Round")
 Ap, Ipx, Ipy, Ep, Deq_x, Deq_y = calc_pile_props("Round" if pile_is_round else "Square", D, B, H, fc)
 
-# ── ปุ่ม Download Excel ──
-st.sidebar.header("5. Export")
-st.sidebar.download_button(
-    "📥 Download Excel (.xlsx)",
-    data=build_excel(),
-    file_name=f"PileSpring_{method}.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    use_container_width=True
-)
-
-pile_is_round = (pile_type == "Round")
-Ap, Ipx, Ipy, Ep, Deq_x, Deq_y = calc_pile_props("Round" if pile_is_round else "Square", D, B, H, fc)
-
 # ─────────────────────────────────────────────
 #  TABS
 # ─────────────────────────────────────────────
@@ -338,7 +468,7 @@ st.title("Pile Lateral Soil Spring Stiffness Calculator")
 st.caption("Units: kN, m  |  All kh methods: JRA / Terzaghi 1955 / Vesic 1961 / Broms 1964")
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📝 Input & Pile Section", "📊 Results & Profile", "📈 kh & Spring Plots", 
+    "📝 Input & Pile Section", "📊 Results & Profile", "📈 kh & Spring Plots",
     "🔧 Pile Reinforcement Design", "📚 N-SPT Reference", "📐 Formulas & References"
 ])
 
@@ -358,8 +488,7 @@ with tab1:
 
     with left_col:
         st.subheader("🪨 Soil Layer Input")
-        
-        # Profile Selector & Viewer
+
         with st.expander("🗂️ เลือกโปรไฟล์ดินตัวอย่าง (Predefined Profiles)", expanded=False):
             selected_profile = st.selectbox("เลือกโปรไฟล์:", list(SOIL_PROFILES.keys()))
             st.dataframe(SOIL_PROFILES[selected_profile], use_container_width=True, hide_index=True)
@@ -420,6 +549,9 @@ for z in depths:
             E0 = 2800 * N_val
         elif method == "Vesic 1961":
             Es_kPa = float(layer.get("Es", 20000))
+            # FIXED: Apply water table reduction for Sand (same as JRA)
+            if soil_type == "Sand" and below_water:
+                Es_kPa *= 0.6
             # FIXED: X-loading uses Ipy (bending about Y-axis), Y-loading uses Ipx
             kh_x = calc_kh_vesic(Es_kPa, Deq_x, Ep, Ipy, nu)
             kh_y = calc_kh_vesic(Es_kPa, Deq_y, Ep, Ipx, nu)
@@ -457,110 +589,24 @@ Ip_for_beta = Ipy if not pile_is_round else Ipx
 kh_avg = df_results["kh_x [kN/m³]"].replace(0, np.nan).mean()
 beta   = (kh_avg * Deq_x / (4 * Ep * Ip_for_beta))**0.25 if (Ep * Ip_for_beta > 0 and kh_avg > 0) else 0
 
-# ─────────────────────────────────────────────
-#  EXCEL EXPORT
-# ─────────────────────────────────────────────
-def build_excel():
-    buf = BytesIO()
-    with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
-        wb = writer.book
-        # Formats
-        fmt_title  = wb.add_format({'bold': True, 'font_size': 12, 'bg_color': '#1a4f8a', 'font_color': 'white', 'border': 1})
-        fmt_header = wb.add_format({'bold': True, 'bg_color': '#BDD7EE', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-        fmt_num    = wb.add_format({'num_format': '#,##0.00', 'border': 1})
-        fmt_bold   = wb.add_format({'bold': True, 'border': 1})
-        fmt_info   = wb.add_format({'italic': True, 'font_color': '#555555'})
+# Calculate rebar parameters
+kh_max_surface, kh_min_deep, as_ratio_rec, As_min = calculate_rebar_params(df_results, Ap)
 
-        # ── Sheet 1: Lateral Springs ──
-        ws1 = wb.add_worksheet("Lateral Springs")
-        ws1.write(0, 0, f"Lateral Soil Spring Stiffness — Method: {method}", fmt_title)
-        ws1.write(1, 0, f"Pile: {pile_type} B={B:.2f}m H={H:.2f}m L={L:.1f}m f'c={fc:.0f}MPa ΔL={node_spacing:.2f}m p-mult={Pmult:.3f}", fmt_info)
-        headers = list(df_results.columns)
-        for ci, h in enumerate(headers):
-            ws1.write(3, ci, h, fmt_header)
-        for ri, row in df_results.iterrows():
-            for ci, val in enumerate(row):
-                if isinstance(val, float) and not np.isnan(val):
-                    ws1.write(4+ri, ci, val, fmt_num)
-                else:
-                    ws1.write(4+ri, ci, val if not (isinstance(val, float) and np.isnan(val)) else '', fmt_num)
-        ws1.set_column(0, len(headers)-1, 15)
+# ── Sidebar Export Button ──
+st.sidebar.header("5. Export")
+excel_data = build_excel(
+    df_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
+    node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta,
+    kh_max_surface, kh_min_deep, as_ratio_rec, As_min
+)
+st.sidebar.download_button(
+    "📥 Download Excel (.xlsx)",
+    data=excel_data,
+    file_name=f"PileSpring_{method}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    use_container_width=True
+)
 
-        # ── Sheet 2: Vertical Tip Spring ──
-        ws2 = wb.add_worksheet("Vertical Tip Spring")
-        ws2.write(0, 0, "Vertical Tip Spring Stiffness", fmt_title)
-        tip_data = [
-            ("Parameter", "Value", "Unit"),
-            ("N-SPT at pile tip", N_tip, "blow/30cm"),
-            ("E0 (at tip)", (2800 if design_stage=="Normal" else 5600)*N_tip, "kN/m²"),
-            ("Pile tip area Ap", Ap, "m²"),
-            ("Kv_tip (vertical spring)", round(Kv_tip, 1), "kN/m"),
-            ("Design Stage", design_stage, "-"),
-        ]
-        for ri, row in enumerate(tip_data):
-            for ci, val in enumerate(row):
-                ws2.write(2+ri, ci, val, fmt_bold if ci==0 else (fmt_num if isinstance(val, (int, float)) else fmt_bold))
-        ws2.set_column(0, 0, 28)
-        ws2.set_column(1, 1, 18)
-        ws2.set_column(2, 2, 12)
-
-        # ── Sheet 3: Summary ──
-        ws3 = wb.add_worksheet("Summary")
-        ws3.write(0, 0, "Project Summary & Pile Properties", fmt_title)
-        summary = [
-            ("Pile Type", pile_type, "-"),
-            ("Width B [m]", B, "m"),
-            ("Height H [m]", H, "m"),
-            ("Pile Length L [m]", L, "m"),
-            ("f'c [MPa]", fc, "MPa"),
-            ("Ep [kN/m²]", round(Ep, 0), "kN/m²"),
-            ("Ap [m²]", round(Ap, 5), "m²"),
-            ("Ix (Bending about X) [m⁴]", round(Ipx, 6), "m⁴"),
-            ("Iy (Bending about Y) [m⁴]", round(Ipy, 6), "m⁴"),
-            ("Node Spacing ΔL [m]", node_spacing, "m"),
-            ("kh Method", method, "-"),
-            ("Design Stage", design_stage, "-"),
-            ("Water Table [m]", water_table, "m"),
-            ("Scour Depth [m]", scour_depth, "m"),
-            ("p-multiplier", Pmult, "-"),
-            ("β (Characteristic Length) [1/m]", round(beta, 4), "1/m"),
-        ]
-        for ri, (k, v, u) in enumerate(summary):
-            ws3.write(2+ri, 0, k, fmt_bold)
-            ws3.write(2+ri, 1, v, fmt_num if isinstance(v, float) else fmt_bold)
-            ws3.write(2+ri, 2, u, fmt_bold)
-        ws3.set_column(0, 0, 34)
-        ws3.set_column(1, 1, 18)
-        ws3.set_column(2, 2, 10)
-
-        # ── Sheet 4: Soil Profile ──
-        df_soil.to_excel(writer, sheet_name="Soil Profile", index=False)
-        ws4 = writer.sheets["Soil Profile"]
-        ws4.set_column(0, len(df_soil.columns)-1, 15)
-
-        # ── Sheet 5: Rebar Design Guide (NEW) ──
-        ws5 = wb.add_worksheet("Rebar Design Guide")
-        ws5.write(0, 0, "Pile Reinforcement Design Guide (Based on Spring Results)", fmt_title)
-        
-        rebar_data = [
-            ("Parameter", "Value", "Remark / Reference"),
-            ("Surface kh_x [kN/m³]", round(kh_max_surface, 1), "Used to evaluate soil stiffness condition"),
-            ("Deep kh_x [kN/m³]", round(kh_min_deep, 1), "Stiffness at pile tip layer"),
-            ("Recommended As Ratio", f"{as_ratio_rec*100:.1f}%", "Based on Crack Control / ACI 318"),
-            ("Minimum As [m²]", round(As_min, 4), "As = Ap x Ratio"),
-            ("Min. Rebar Requirement", "See ACI 10.5.1 & 21.6", "Max of Code min. or Crack control min."),
-        ]
-        for ri, row in enumerate(rebar_data):
-            for ci, val in enumerate(row):
-                fmt_use = fmt_bold if ci==0 else fmt_num if isinstance(val, (int, float)) else fmt_info
-                ws5.write(2+ri, ci, val, fmt_use)
-            
-        ws5.set_column(0, 0, 32)
-        ws5.set_column(1, 1, 20)
-        ws5.set_column(2, 2, 50)
-
-    buf.seek(0)
-    return buf.read()
 # ══════════════════════════════════════════════
 #  TAB 2  —  RESULTS TABLE + PROFILE
 # ══════════════════════════════════════════════
@@ -608,34 +654,34 @@ with tab3:
         st.subheader("kh vs Depth")
         fig_kh = go.Figure()
         fig_kh.add_trace(go.Scatter(
-            x=df_results["kh_x [kN/m³]"], y=df_results["Depth [m]"], 
+            x=df_results["kh_x [kN/m³]"], y=df_results["Depth [m]"],
             mode='lines+markers', name='kh_x', line=dict(color='#1a4f8a', width=2),
             marker=dict(size=5)
         ))
         if not pile_is_round:
             fig_kh.add_trace(go.Scatter(
-                x=df_results["kh_y [kN/m³]"], y=df_results["Depth [m]"], 
+                x=df_results["kh_y [kN/m³]"], y=df_results["Depth [m]"],
                 mode='lines+markers', name='kh_y', line=dict(color='#c0392b', width=2, dash='dash'),
                 marker=dict(size=5)
             ))
         fig_kh.update_layout(
-            height=500, yaxis=dict(autorange="reversed", title="Depth [m]"), 
-            xaxis=dict(title="kh [kN/m³]"), 
-            legend=dict(x=0.65, y=0.02) # เพิ่ม Legend กลับมา
+            height=500, yaxis=dict(autorange="reversed", title="Depth [m]"),
+            xaxis=dict(title="kh [kN/m³]"),
+            legend=dict(x=0.65, y=0.02)
         )
         st.plotly_chart(fig_kh, use_container_width=True)
-        
+
     with p2:
         st.subheader("Spring Stiffness vs Depth")
         fig_ks = go.Figure()
         fig_ks.add_trace(go.Scatter(
-            x=df_results["Ksx [kN/m]"], y=df_results["Depth [m]"], 
+            x=df_results["Ksx [kN/m]"], y=df_results["Depth [m]"],
             mode='lines+markers', name='Ksx', line=dict(color='#1a4f8a', width=2),
             fill='tozerox', fillcolor='rgba(26,79,138,0.08)'
         ))
         if not pile_is_round:
             fig_ks.add_trace(go.Scatter(
-                x=df_results["Ksy [kN/m]"], y=df_results["Depth [m]"], 
+                x=df_results["Ksy [kN/m]"], y=df_results["Depth [m]"],
                 mode='lines+markers', name='Ksy', line=dict(color='#c0392b', width=2, dash='dash'),
                 fill='tozerox', fillcolor='rgba(192,57,43,0.06)'
             ))
@@ -645,13 +691,12 @@ with tab3:
             text=[f"Kv={Kv_tip:,.0f}"], textposition="middle right"
         ))
         fig_ks.update_layout(
-            height=500, yaxis=dict(autorange="reversed", title="Depth [m]"), 
-            xaxis=dict(title="Spring Stiffness [kN/m]"), 
-            legend=dict(x=0.45, y=0.02) # เพิ่ม Legend กลับมา
+            height=500, yaxis=dict(autorange="reversed", title="Depth [m]"),
+            xaxis=dict(title="Spring Stiffness [kN/m]"),
+            legend=dict(x=0.45, y=0.02)
         )
         st.plotly_chart(fig_ks, use_container_width=True)
 
-    # ── เพิ่มส่วน Beta & Guidance กลับมา ──
     st.subheader("β — Relative Stiffness")
     st.info(
         f"β = (kh·D / 4EpIp)^0.25 = **{beta:.4f} m⁻¹** | "
@@ -712,9 +757,9 @@ with tab4:
     - **Shear Force (V):** ขึ้นกับความชันของ Bending Moment Diagram ซึ่งขึ้นกับ **ค่า kh ด้านนอก (Outer Layers)**
     - **Longitudinal Rebar:** ต้องควบคุม Crack Width ซึ่งขึ้นกับ Service Moment ที่ได้จากค่า **kh ด้านใน (Inner Layers)**
     """)
-    
+
     st.subheader("1. การเลือก Method สำหรับออกแบบเหล็กเสริม (Workflow แนะนำ)")
-    
+
     col_w1, col_w2 = st.columns(2)
     with col_w1:
         st.success("""
@@ -735,21 +780,17 @@ with tab4:
     st.divider()
     st.subheader("2. Minimum Longitudinal Reinforcement (อิงจาก Crack Control & ACI)")
     st.caption("สำหรับเสาเข็มที่ทนแรงด้านข้าง ค่า Min. As ไม่ใช่เพียง 1% ของ Ap ตาม ACI 10.5.1 แต่ควรควบคุมจาก Serviceability (Crack Width)")
-    
-    # Rough approximation based on Gumbel distribution for soft clay
-    kh_max_surface = df_results["kh_x [kN/m³]"].iloc[1] if len(df_results) > 1 else 0
-    kh_min_deep = df_results["kh_x [kN/m³]"].iloc[-1] if len(df_results) > 0 else 0
-    
+
     st.write(f"**สภาพดินจาก Input:** kh ที่ผิวดิน = {kh_max_surface:,.0f} kN/m³ | kh ชั้นลึก = {kh_min_deep:,.0f} kN/m³")
-    
+
     if kh_max_surface <= 5000:
-        as_ratio_rec = 0.015 # 1.5% สำหรับ Soft Clay
+        as_ratio_rec = 0.015
         st.warning(f"🟠 **Soft Clay / Very Low kh:** แรงดันดินยังไม่สามารถรับแรงด้านข้างได้ดี ควรใช้ As >= **{as_ratio_rec*100:.1f}%** ของ Ap เพื่อควบคุมรอยร้าว")
     elif kh_max_surface <= 15000:
-        as_ratio_rec = 0.010 # 1.0%
+        as_ratio_rec = 0.010
         st.success(f"🟢 **Medium Stiff Clay / Low kh:** ใช้ As >= **{as_ratio_rec*100:.1f}%** ของ Ap (ตาม ACI 10.5.1 ทั่วไป)")
     else:
-        as_ratio_rec = 0.008 # 0.8%
+        as_ratio_rec = 0.008
         st.success(f"🔵 **Stiff Clay / Sand (High kh):** ดินช่วยรับแรงได้ดี สามารถใช้ As >= **{as_ratio_rec*100:.1f}%** ของ Ap ได้")
 
     As_min = Ap * as_ratio_rec
@@ -757,7 +798,7 @@ with tab4:
     c1.metric("Ap [m²]", f"{Ap:.4f}")
     c2.metric("Recommended As Ratio", f"{as_ratio_rec*100:.1f}%")
     c3.metric("Min. As [m²]", f"{As_min:.4f}", help="ค่าพื้นที่เหล็กเสริมขั้นต่ำที่แนะนำสำหรับออกแบบ")
-    
+
     st.divider()
     st.subheader("3. Shear Reinforcement (Links) Guidance")
     st.markdown("""
@@ -768,7 +809,7 @@ with tab4:
     """)
 
 # ══════════════════════════════════════════════
-#  TAB 5 & 6  —  REFERENCE & FORMULAS (Keep existing content logic)
+#  TAB 5 & 6  —  REFERENCE & FORMULAS
 # ══════════════════════════════════════════════
 with tab5:
     st.subheader("📚 N-SPT Reference Values")
