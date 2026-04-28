@@ -193,10 +193,11 @@ def draw_spring(x0, x1, y, n_coils=7):
     return xs, ys
 
 def pile_section_figure(pile_type, D, B, H, Ap, Ipx, Ipy, Ep, compact=False):
-    """Pile cross-section figure with dimension annotations"""
+    """Pile cross-section figure with dimension annotations and axis labels"""
     fig = go.Figure()
     pad = max(D, B, H) * 0.7
     dim_offset = max(D, B, H) * 0.35
+    axis_len = max(D, B, H) * 0.5  # ความยาวของแกน
 
     if pile_type == "Round":
         theta = np.linspace(0, 2*np.pi, 200)
@@ -211,7 +212,8 @@ def pile_section_figure(pile_type, D, B, H, Ap, Ipx, Ipy, Ep, compact=False):
         fig.add_annotation(ax=r, ay=ay, x=-r, y=ay, xref='x', yref='y', axref='x', ayref='y',
                            arrowhead=2, arrowsize=1.2, arrowwidth=1.5, arrowcolor='#1a4f8a')
         fig.add_annotation(x=0, y=ay, text=f"<b>D = {D:.2f} m</b>", showarrow=False, yshift=-16, font=dict(size=13, color='#1a4f8a'))
-        fig.add_trace(go.Scatter(x=[0], y=[0], mode='markers', marker=dict(color='red', size=10), showlegend=False))
+        # CG marker
+        fig.add_trace(go.Scatter(x=[0], y=[0], mode='markers', marker=dict(color='red', size=12, symbol='x'), showlegend=False, name='CG'))
         lim = r + pad
         title_text = f"Round Pile  D = {D:.2f} m"
     else:
@@ -231,9 +233,29 @@ def pile_section_figure(pile_type, D, B, H, Ap, Ipx, Ipy, Ep, compact=False):
         fig.add_annotation(ax=ax_h, ay=y1, x=ax_h, y=y0, xref='x', yref='y', axref='x', ayref='y',
                            arrowhead=2, arrowsize=1.2, arrowwidth=1.5, arrowcolor='#c0392b')
         fig.add_annotation(x=ax_h, y=0, text=f"<b>H = {H:.2f} m</b>", showarrow=False, xshift=22, font=dict(size=13, color='#c0392b'))
-        fig.add_trace(go.Scatter(x=[0], y=[0], mode='markers', marker=dict(color='red', size=10), showlegend=False))
+        # CG marker
+        fig.add_trace(go.Scatter(x=[0], y=[0], mode='markers', marker=dict(color='red', size=12, symbol='x'), showlegend=False, name='CG'))
         lim = max(B, H) / 2 + pad
         title_text = f"Square/Rect Pile  B×H = {B:.2f}×{H:.2f} m"
+
+    # ── เพิ่มแกน X และ Y ที่จุด CG ──
+    # แกน X (ลากผ่าน CG ไปทางขวา)
+    fig.add_annotation(ax=0, ay=0, x=axis_len, y=0, xref='x', yref='y', axref='x', ayref='y',
+                       arrowhead=2, arrowsize=1.0, arrowwidth=2.0, arrowcolor='#333333', showarrow=True)
+    # ป้าย X
+    fig.add_annotation(x=axis_len * 0.9, y=axis_len * 0.15, text="<b>X</b>", showarrow=False,
+                       font=dict(size=14, color='#333333', family='Arial Black'), xref='x', yref='y')
+
+    # แกน Y (ลากผ่าน CG ไปขึ้นบน)
+    fig.add_annotation(ax=0, ay=0, x=0, y=axis_len, xref='x', yref='y', axref='x', ayref='y',
+                       arrowhead=2, arrowsize=1.0, arrowwidth=2.0, arrowcolor='#333333', showarrow=True)
+    # ป้าย Y
+    fig.add_annotation(x=axis_len * 0.15, y=axis_len * 0.85, text="<b>Y</b>", showarrow=False,
+                       font=dict(size=14, color='#333333', family='Arial Black'), xref='x', yref='y')
+
+    # CG Label
+    fig.add_annotation(x=0, y=-axis_len * 0.2, text="<b>CG</b>", showarrow=False,
+                       font=dict(size=10, color='red'), xref='x', yref='y', textangle=0)
 
     props_text = (f"Ap = {Ap:.4f} m²<br>Ix = {Ipx:.5f} m⁴<br>Iy = {Ipy:.5f} m⁴<br>Ep = {Ep/1000:.0f} MPa")
     fig.add_annotation(x=lim * 0.98, y=lim * 0.72, xref='x', yref='y', text=props_text, showarrow=False, align='left',
