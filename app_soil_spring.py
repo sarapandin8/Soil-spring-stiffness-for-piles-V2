@@ -281,19 +281,52 @@ if use_group:
     nx = gc1.number_input("Piles in X", 1, 20, 3, 1, key="nx")
     ny = gc2.number_input("Piles in Y", 1, 20, 3, 1, key="ny")
     n_total = int(nx * ny)
+    
     def fm_row_list(n_piles, s_over_D):
         fms = []
         for i in range(n_piles):
             pos = "Lead Row" if i == 0 else ("2nd Row" if i == 1 else "3rd Row+")
             fms.append(calc_pmultiplier(s_over_D, pos))
         return fms
+        
     fms_x = fm_row_list(int(nx), s_D)
     fms_y = fm_row_list(int(ny), s_D)
     fm_vals = [min(fms_x[ix], fms_y[iy]) for iy in range(int(ny)) for ix in range(int(nx))]
     Pmult = sum(fm_vals) / n_total if n_total > 0 else 1.0
-    if s_D >= 6.0: Pmult = 1.0
+    
+    if s_D >= 6.0:
+        st.sidebar.success("s/D ≥ 6 → fm = 1.00 (no reduction)")
+        Pmult = 1.0
+    else:
+        st.sidebar.info(
+            f"**Average fm = {Pmult:.3f}**  (ใช้ค่าเดียวทุกต้น)\n\n"
+            f"nx={int(nx)}, ny={int(ny)}, n={n_total} piles\n\n"
+            f"Ref: FHWA-NHI-16-009 §9.4"
+        )
+        with st.sidebar.expander("📋 fm breakdown per row"):
+            st.caption("**X-direction rows** (loading → X)")
+            for i, fm in enumerate(fms_x):
+                lbl = "Lead" if i==0 else ("2nd" if i==1 else "3rd+")
+                st.write(f"  Row {i+1} ({lbl}): fm = {fm:.3f}")
+            st.caption("**Y-direction rows** (loading → Y)")
+            for i, fm in enumerate(fms_y):
+                lbl = "Lead" if i==0 else ("2nd" if i==1 else "3rd+")
+                st.write(f"  Row {i+1} ({lbl}): fm = {fm:.3f}")
 else:
     Pmult = 1.0
+
+pile_is_round = (pile_type == "Round")
+Ap, Ipx, Ipy, Ep, Deq_x, Deq_y = calc_pile_props("Round" if pile_is_round else "Square", D, B, H, fc)
+
+# ── ปุ่ม Download Excel ──
+st.sidebar.header("5. Export")
+st.sidebar.download_button(
+    "📥 Download Excel (.xlsx)",
+    data=build_excel(),
+    file_name=f"PileSpring_{method}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    use_container_width=True
+)
 
 pile_is_round = (pile_type == "Round")
 Ap, Ipx, Ipy, Ep, Deq_x, Deq_y = calc_pile_props("Round" if pile_is_round else "Square", D, B, H, fc)
@@ -576,14 +609,20 @@ with tab3:
         fig_kh = go.Figure()
         fig_kh.add_trace(go.Scatter(
             x=df_results["kh_x [kN/m³]"], y=df_results["Depth [m]"], 
-            mode='lines+markers', name='kh_x', line=dict(color='#1a4f8a', width=2)
+            mode='lines+markers', name='kh_x', line=dict(color='#1a4f8a', width=2),
+            marker=dict(size=5)
         ))
         if not pile_is_round:
             fig_kh.add_trace(go.Scatter(
                 x=df_results["kh_y [kN/m³]"], y=df_results["Depth [m]"], 
-                mode='lines+markers', name='kh_y', line=dict(color='#c0392b', width=2, dash='dash')
+                mode='lines+markers', name='kh_y', line=dict(color='#c0392b', width=2, dash='dash'),
+                marker=dict(size=5)
             ))
-        fig_kh.update_layout(height=500, yaxis=dict(autorange="reversed", title="Depth [m]"), xaxis=dict(title="kh [kN/m³]"))
+        fig_kh.update_layout(
+            height=500, yaxis=dict(autorange="reversed", title="Depth [m]"), 
+            xaxis=dict(title="kh [kN/m³]"), 
+            legend=dict(x=0.65, y=0.02) # เพิ่ม Legend กลับมา
+        )
         st.plotly_chart(fig_kh, use_container_width=True)
         
     with p2:
@@ -594,21 +633,74 @@ with tab3:
             mode='lines+markers', name='Ksx', line=dict(color='#1a4f8a', width=2),
             fill='tozerox', fillcolor='rgba(26,79,138,0.08)'
         ))
-        # FIXED: เพิ่มเส้น Ksy สำหรับกรณีเสาเข็มสี่เหลี่ยม
         if not pile_is_round:
             fig_ks.add_trace(go.Scatter(
                 x=df_results["Ksy [kN/m]"], y=df_results["Depth [m]"], 
                 mode='lines+markers', name='Ksy', line=dict(color='#c0392b', width=2, dash='dash'),
                 fill='tozerox', fillcolor='rgba(192,57,43,0.06)'
             ))
-        # เพิ่มจุดแสดงค่า Kv_tip ที่ฐานเสาเข็ม
         fig_ks.add_trace(go.Scatter(
             x=[Kv_tip], y=[L], mode='markers+text', name=f'Kv_tip',
             marker=dict(color='#d62728', size=14, symbol='diamond'),
             text=[f"Kv={Kv_tip:,.0f}"], textposition="middle right"
         ))
-        fig_ks.update_layout(height=500, yaxis=dict(autorange="reversed", title="Depth [m]"), xaxis=dict(title="Spring Stiffness [kN/m]"))
+        fig_ks.update_layout(
+            height=500, yaxis=dict(autorange="reversed", title="Depth [m]"), 
+            xaxis=dict(title="Spring Stiffness [kN/m]"), 
+            legend=dict(x=0.45, y=0.02) # เพิ่ม Legend กลับมา
+        )
         st.plotly_chart(fig_ks, use_container_width=True)
+
+    # ── เพิ่มส่วน Beta & Guidance กลับมา ──
+    st.subheader("β — Relative Stiffness")
+    st.info(
+        f"β = (kh·D / 4EpIp)^0.25 = **{beta:.4f} m⁻¹** | "
+        f"1/β = **{1/beta:.2f} m** (characteristic length) | "
+        f"Leff = 4/β = **{4/beta:.2f} m** | "
+        f"{'✅ Long pile (L > 4/β)' if L > 4/beta else '⚠️ Short pile (L < 4/β)'}"
+        if beta > 0 else "β cannot be computed (check inputs)"
+    )
+
+    st.divider()
+    st.subheader("📌 คำแนะนำการเลือก Method — Engineering Guidance")
+    with st.expander("🔍 ทำไม kh แต่ละ Method จึงให้ค่าต่างกัน และควรใช้ Method ใด?", expanded=True):
+        col_g1, col_g2 = st.columns(2)
+        with col_g1:
+            st.markdown("""
+**ลำดับค่า kh ไม่คงที่ — ขึ้นกับ soil type และ depth**
+
+| สถานการณ์ | ลำดับ kh (ต่ำ → สูง) |
+|-----------|----------------------|
+| Soft Clay, z < 5m | Terzaghi ≪ Vesic < JRA ≪ Broms |
+| Stiff Clay, z > 10m | Terzaghi < JRA ≈ Vesic ≪ Broms |
+| Loose Sand, z < 3m | Terzaghi < Vesic < JRA ≪ Broms |
+| Dense Sand, z > 10m | Vesic < JRA < Terzaghi ≪ Broms |
+
+**Broms ให้ค่าสูงเสมอ เพราะ:**
+kh = pu / (0.01D × D) คำนวณจาก ultimate resistance
+ที่ displacement = 1%D ซึ่งใกล้ failure แล้ว
+**ไม่ใช่ elastic stiffness** → ห้ามใช้เป็น spring ใน FEA
+""")
+        with col_g2:
+            st.markdown("""
+**คำแนะนำสำหรับออกแบบเหล็กเสริมเสาเข็ม**
+
+| Method | บทบาท | เหตุผล |
+|--------|--------|--------|
+| ✅ **JRA** | Primary design | Calibrated สำหรับงานสะพาน, ใช้ N-SPT โดยตรง, DOH/MRTA ยอมรับ |
+| ⚖️ **Terzaghi** | Cross-check | Conservative bound, ถ้า JRA vs Terzaghi ต่างกัน <50% → มั่นใจได้ |
+| ⚠️ **Vesic** | งานพิเศษ | ใช้ได้เฉพาะมี Es จาก PMT/lab จริง ไม่ใช่จาก N-SPT correlation |
+| 🚫 **Broms** | Capacity check เท่านั้น | ไม่เหมาะเป็น FEA spring → displacement น้อยกว่าจริง |
+
+**Workflow แนะนำ:**
+1. คำนวณด้วย JRA → ใช้ออกแบบ
+2. Cross-check ด้วย Terzaghi → ตรวจสอบความสมเหตุสมผล
+3. ถ้าผลต่างกัน > 50% → ตรวจสอบ N-SPT อีกครั้ง
+4. Report ระบุ: *"JRA method, cross-checked with Terzaghi"*
+
+> **หมายเหตุ:** สำหรับดิน Soft Bangkok Clay (N=1–4) ในช่วง 0–15 m
+> ค่า kh ต่ำมากทุก method — ซึ่งถูกต้องตามพฤติกรรมจริงของดิน
+""")
 
 # ══════════════════════════════════════════════
 #  TAB 4  —  PILE REINFORCEMENT DESIGN
