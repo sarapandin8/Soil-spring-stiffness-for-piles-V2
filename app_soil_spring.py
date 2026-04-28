@@ -574,16 +574,40 @@ with tab3:
     with p1:
         st.subheader("kh vs Depth")
         fig_kh = go.Figure()
-        fig_kh.add_trace(go.Scatter(x=df_results["kh_x [kN/m³]"], y=df_results["Depth [m]"], mode='lines+markers', name='kh_x', line=dict(color='#1a4f8a', width=2)))
+        fig_kh.add_trace(go.Scatter(
+            x=df_results["kh_x [kN/m³]"], y=df_results["Depth [m]"], 
+            mode='lines+markers', name='kh_x', line=dict(color='#1a4f8a', width=2)
+        ))
         if not pile_is_round:
-            fig_kh.add_trace(go.Scatter(x=df_results["kh_y [kN/m³]"], y=df_results["Depth [m]"], mode='lines+markers', name='kh_y', line=dict(color='#c0392b', width=2, dash='dash')))
+            fig_kh.add_trace(go.Scatter(
+                x=df_results["kh_y [kN/m³]"], y=df_results["Depth [m]"], 
+                mode='lines+markers', name='kh_y', line=dict(color='#c0392b', width=2, dash='dash')
+            ))
         fig_kh.update_layout(height=500, yaxis=dict(autorange="reversed", title="Depth [m]"), xaxis=dict(title="kh [kN/m³]"))
         st.plotly_chart(fig_kh, use_container_width=True)
+        
     with p2:
         st.subheader("Spring Stiffness vs Depth")
         fig_ks = go.Figure()
-        fig_ks.add_trace(go.Scatter(x=df_results["Ksx [kN/m]"], y=df_results["Depth [m]"], mode='lines+markers', name='Ksx', fill='tozerox', fillcolor='rgba(26,79,138,0.08)'))
-        fig_ks.update_layout(height=500, yaxis=dict(autorange="reversed", title="Depth [m]"), xaxis=dict(title="Spring [kN/m]"))
+        fig_ks.add_trace(go.Scatter(
+            x=df_results["Ksx [kN/m]"], y=df_results["Depth [m]"], 
+            mode='lines+markers', name='Ksx', line=dict(color='#1a4f8a', width=2),
+            fill='tozerox', fillcolor='rgba(26,79,138,0.08)'
+        ))
+        # FIXED: เพิ่มเส้น Ksy สำหรับกรณีเสาเข็มสี่เหลี่ยม
+        if not pile_is_round:
+            fig_ks.add_trace(go.Scatter(
+                x=df_results["Ksy [kN/m]"], y=df_results["Depth [m]"], 
+                mode='lines+markers', name='Ksy', line=dict(color='#c0392b', width=2, dash='dash'),
+                fill='tozerox', fillcolor='rgba(192,57,43,0.06)'
+            ))
+        # เพิ่มจุดแสดงค่า Kv_tip ที่ฐานเสาเข็ม
+        fig_ks.add_trace(go.Scatter(
+            x=[Kv_tip], y=[L], mode='markers+text', name=f'Kv_tip',
+            marker=dict(color='#d62728', size=14, symbol='diamond'),
+            text=[f"Kv={Kv_tip:,.0f}"], textposition="middle right"
+        ))
+        fig_ks.update_layout(height=500, yaxis=dict(autorange="reversed", title="Depth [m]"), xaxis=dict(title="Spring Stiffness [kN/m]"))
         st.plotly_chart(fig_ks, use_container_width=True)
 
 # ══════════════════════════════════════════════
