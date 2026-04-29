@@ -185,13 +185,14 @@ if 'version' not in st.session_state or st.session_state.version < VERSION:
     st.session_state.clear()
     st.session_state.version = VERSION
 
-if 'soil_layers' not in st.session_state:
-    st.session_state.soil_layers = SOIL_PROFILES["กรุงเทพฯ - โปรไฟล์ทั่วไป (General)"].copy()
-
 # ★ CRITICAL: ต้อง apply pending changes ก่อน widget ถูกสร้างทั้งหมด
 _apply_pending_reset()
 _apply_pending_load()
 _apply_pending_profile()
+
+# ต้อง init soil_layers หลัง pending handlers (เพราะ Reset อาจลบ key นี้ไป)
+if 'soil_layers' not in st.session_state:
+    st.session_state.soil_layers = SOIL_PROFILES["กรุงเทพฯ - โปรไฟล์ทั่วไป (General)"].copy()
 
 # ─────────────────────────────────────────────
 #  ENGINEERING FUNCTIONS
@@ -933,7 +934,11 @@ with tab3:
         fig_kh.update_layout(height=500,
                              yaxis=dict(autorange="reversed", title="Depth [m]"),
                              xaxis=dict(title="kh [kN/m³]"),
-                             legend=dict(x=0.65, y=0.02))
+                             legend=dict(orientation="h", yanchor="bottom",
+                                         y=1.02, xanchor="right", x=1,
+                                         bgcolor="rgba(255,255,255,0.85)",
+                                         bordercolor="#ccc", borderwidth=1),
+                             margin=dict(l=10, r=10, t=60, b=10))
         st.plotly_chart(fig_kh, use_container_width=True)
 
     with p2:
@@ -948,9 +953,18 @@ with tab3:
                                         mode='lines+markers', name='Ksy',
                                         line=dict(color='#c0392b', width=2, dash='dash'),
                                         fill='tozerox', fillcolor='rgba(192,57,43,0.06)'))
-        fig_ks.add_trace(go.Scatter(x=[Kv_tip], y=[L], mode='markers+text', name='Kv_tip',
+        fig_ks.add_trace(go.Scatter(x=[Kv_tip], y=[L], mode='markers', name='Kv_tip',
                                     marker=dict(color='#d62728', size=14, symbol='diamond'),
-                                    text=[f"Kv={Kv_tip:,.0f}"], textposition="middle right"))
+                                    hovertemplate=f'Kv_tip = {Kv_tip:,.0f} kN/m<extra></extra>'))
+        # ใช้ annotation พร้อมลูกศร แทน text บน marker (ไม่ทับเส้น)
+        fig_ks.add_annotation(x=Kv_tip, y=L, ax=20, ay=-30,
+                              xref='x', yref='y', axref='pixel', ayref='pixel',
+                              text=f"<b>Kv_tip = {Kv_tip:,.0f}</b>",
+                              showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.2,
+                              arrowcolor='#d62728',
+                              bgcolor="rgba(255,255,255,0.9)", bordercolor="#d62728",
+                              borderwidth=1, borderpad=4,
+                              font=dict(size=11, color='#d62728'))
         if water_table < L:
             fig_ks.add_hline(y=water_table, line_dash="dot", line_color="#2196F3",
                              annotation_text=f"WT {water_table:.1f}m", annotation_position="right")
@@ -961,7 +975,11 @@ with tab3:
         fig_ks.update_layout(height=500,
                              yaxis=dict(autorange="reversed", title="Depth [m]"),
                              xaxis=dict(title="Spring Stiffness [kN/m]"),
-                             legend=dict(x=0.45, y=0.02))
+                             legend=dict(orientation="h", yanchor="bottom",
+                                         y=1.02, xanchor="right", x=1,
+                                         bgcolor="rgba(255,255,255,0.85)",
+                                         bordercolor="#ccc", borderwidth=1),
+                             margin=dict(l=10, r=10, t=60, b=10))
         st.plotly_chart(fig_ks, use_container_width=True)
 
     st.subheader("β — Relative Stiffness")
