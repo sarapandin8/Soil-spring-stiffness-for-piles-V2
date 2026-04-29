@@ -160,8 +160,12 @@ SOIL_PROFILES = {
         {"Depth_From": 10.0, "Depth_To": 15.0, "Soil_Type": "Clay", "Consistency": "Very Stiff",   "SPT_N": 22, "Es": 35000, "cu": 130, "phi": 0, "Gamma": 19.0},
         {"Depth_From": 15.0, "Depth_To": 20.0, "Soil_Type": "Sand", "Consistency": "Dense",        "SPT_N": 35, "Es": 80000, "cu": 0,   "phi": 36, "Gamma": 20.0},
     ]),
-    "ตารางว่าง (ใส่เอง)": pd.DataFrame([
-        {"Depth_From": 0.0, "Depth_To": 10.0, "Soil_Type": "Clay", "Consistency": "Medium Stiff", "SPT_N": 6, "Es": 8000, "cu": 36, "phi": 0, "Gamma": 17.0}
+    "ดินทั่วไปประเทศไทย - Default (5 ชั้น)": pd.DataFrame([
+        {"Depth_From":  0.0, "Depth_To":  5.0, "Soil_Type": "Clay", "Consistency": "Soft",         "SPT_N":  4, "Es":  5000, "cu":  25, "phi": 0,  "Gamma": 17.0},
+        {"Depth_From":  5.0, "Depth_To": 10.0, "Soil_Type": "Clay", "Consistency": "Medium Stiff", "SPT_N":  9, "Es": 12000, "cu":  55, "phi": 0,  "Gamma": 17.5},
+        {"Depth_From": 10.0, "Depth_To": 15.0, "Soil_Type": "Clay", "Consistency": "Stiff",        "SPT_N": 16, "Es": 26000, "cu":  96, "phi": 0,  "Gamma": 18.0},
+        {"Depth_From": 15.0, "Depth_To": 20.0, "Soil_Type": "Sand", "Consistency": "Medium Dense", "SPT_N": 22, "Es": 45000, "cu":   0, "phi": 32, "Gamma": 18.5},
+        {"Depth_From": 20.0, "Depth_To": 25.0, "Soil_Type": "Sand", "Consistency": "Dense",        "SPT_N": 38, "Es": 80000, "cu":   0, "phi": 35, "Gamma": 19.0},
     ])
 }
 
@@ -814,6 +818,13 @@ else:
 depths  = np.arange(0, L + 1e-9, node_spacing)
 results = []
 
+# df_soil_draw: version ที่กรองแถวไม่ครบออกแล้ว — ใช้สำหรับวาด UI ทุกที่
+_req_draw = ["Depth_From", "Depth_To", "Soil_Type", "SPT_N"]
+df_soil_draw = df_soil.dropna(subset=_req_draw).copy()
+df_soil_draw = df_soil_draw[
+    df_soil_draw["Soil_Type"].astype(str).str.strip().isin(["Clay", "Sand"])
+].reset_index(drop=True)
+
 if not _ready:
     df_results = pd.DataFrame()
     N_tip = 0.0; Kv_tip = 0.0; kv_tip = 0.0
@@ -897,7 +908,7 @@ else:
 st.sidebar.header("5. Export")
 if _ready:
     excel_data = build_excel(
-        df_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
+        df_results, df_soil_draw, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
         node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta,
         kh_max_surface, kh_min_deep, as_ratio_rec, As_min
     )
@@ -965,22 +976,25 @@ st.sidebar.caption(f"App Version {VERSION}")
 with tab2:
     mc = st.columns(5)
     mc[0].metric("Method", method)
-    mc[1].metric("β [1/m]", f"{beta:.3f}" if beta > 0 else "—")
-    mc[2].metric("Kv_tip [kN/m]", f"{Kv_tip:,.0f}")
-    mc[3].metric("p-mult", f"{Pmult:.3f}")
-    mc[4].metric("Nodes", len(depths))
+    mc[1].metric("β [1/m]",       f"{beta:.3f}"   if (_ready and beta > 0) else "—")
+    mc[2].metric("Kv_tip [kN/m]", f"{Kv_tip:,.0f}" if _ready else "—")
+    mc[3].metric("p-mult",        f"{Pmult:.3f}")
+    mc[4].metric("Nodes",         len(depths) if _ready else "—")
     st.divider()
 
     r_left, r_right = st.columns([2, 3], gap="medium")
     with r_left:
         st.subheader("Calculation Results")
-        st.dataframe(df_results.style.format({
-            "Depth [m]":    "{:.2f}",
-            "kh_x [kN/m³]": "{:,.0f}",
-            "kh_y [kN/m³]": "{:,.0f}",
-            "Ksx [kN/m]":   "{:,.1f}",
-            "Ksy [kN/m]":   "{:,.1f}"
-        }), use_container_width=True, height=580)
+        if not _ready or df_results.empty:
+            st.info("⏳ กรุณากรอกข้อมูลชั้นดินให้ครบก่อน ระบบจะแสดงผลลัพธ์ที่นี่", icon="🪨")
+        else:
+            st.dataframe(df_results.style.format({
+                "Depth [m]":    "{:.2f}",
+                "kh_x [kN/m³]": "{:,.0f}",
+                "kh_y [kN/m³]": "{:,.0f}",
+                "Ksx [kN/m]":   "{:,.1f}",
+                "Ksy [kN/m]":   "{:,.1f}"
+            }), use_container_width=True, height=580)
     with r_right:
         st.subheader("Soil-Pile Profile with Springs")
         SOIL_COLORS = {"Clay": "#8B6354", "Sand": "#D4AA6A"}
@@ -988,7 +1002,7 @@ with tab2:
         x_pile = Deq_x / 2
         x_max  = Deq_x * 4.0
 
-        for _, lrow in df_soil.iterrows():
+        for _, lrow in df_soil_draw.iterrows():
             fig_p.add_shape(type="rect", x0=-x_max, y0=lrow["Depth_From"],
                             x1=x_max, y1=lrow["Depth_To"],
                             fillcolor=SOIL_COLORS.get(lrow["Soil_Type"], "#888"),
@@ -1011,25 +1025,26 @@ with tab2:
                         line=dict(color="#1a4f8a", width=2),
                         fillcolor="rgba(180,210,240,0.6)", layer="above")
         spr_len = Deq_x * 1.2
-        for z, ksx in zip(depths, df_results["Ksx [kN/m]"]):
-            if ksx > 1e-3:
-                sx, sy = draw_spring(x_pile, x_pile + spr_len, z)
-                fig_p.add_trace(go.Scatter(x=sx, y=sy, mode='lines',
-                                           line=dict(color='#2166ac', width=1.8),
-                                           showlegend=False, hoverinfo='skip'))
-                sx, sy = draw_spring(-x_pile - spr_len, -x_pile, z)
-                fig_p.add_trace(go.Scatter(x=sx, y=sy, mode='lines',
-                                           line=dict(color='#2166ac', width=1.8),
-                                           showlegend=False, hoverinfo='skip'))
-        fig_p.add_trace(go.Scatter(x=[0]*len(depths), y=depths, mode='markers',
-                                    marker=dict(color='red', size=7), name="Node",
-                                    hovertemplate='z=%{y:.2f}m<br>Ksx=%{customdata[0]:.0f} kN/m<extra></extra>',
-                                    customdata=list(zip(df_results["Ksx [kN/m]"]))))
-        # Vertical tip spring
-        fig_p.add_trace(go.Scatter(x=[0], y=[L], mode='markers+text',
-                                    marker=dict(color='#d62728', size=14, symbol='diamond'),
-                                    text=[f"  Kv_tip={Kv_tip:,.0f}"], textposition="middle right",
-                                    name="Kv_tip", showlegend=False))
+        if _ready and not df_results.empty:
+            for z, ksx in zip(depths, df_results["Ksx [kN/m]"]):
+                if ksx > 1e-3:
+                    sx, sy = draw_spring(x_pile, x_pile + spr_len, z)
+                    fig_p.add_trace(go.Scatter(x=sx, y=sy, mode='lines',
+                                               line=dict(color='#2166ac', width=1.8),
+                                               showlegend=False, hoverinfo='skip'))
+                    sx, sy = draw_spring(-x_pile - spr_len, -x_pile, z)
+                    fig_p.add_trace(go.Scatter(x=sx, y=sy, mode='lines',
+                                               line=dict(color='#2166ac', width=1.8),
+                                               showlegend=False, hoverinfo='skip'))
+            fig_p.add_trace(go.Scatter(x=[0]*len(depths), y=depths, mode='markers',
+                                        marker=dict(color='red', size=7), name="Node",
+                                        hovertemplate='z=%{y:.2f}m<br>Ksx=%{customdata[0]:.0f} kN/m<extra></extra>',
+                                        customdata=list(zip(df_results["Ksx [kN/m]"]))))
+            # Vertical tip spring
+            fig_p.add_trace(go.Scatter(x=[0], y=[L], mode='markers+text',
+                                        marker=dict(color='#d62728', size=14, symbol='diamond'),
+                                        text=[f"  Kv_tip={Kv_tip:,.0f}"], textposition="middle right",
+                                        name="Kv_tip", showlegend=False))
         fig_p.add_hline(y=water_table, line_dash="dash", line_color="#2196F3",
                         line_width=1.5,
                         annotation_text=f"▼ WT @ {water_table:.1f} m",
@@ -1043,8 +1058,11 @@ with tab2:
 
 # ════════ TAB 3 — PLOTS ════════
 with tab3:
-    p1, p2 = st.columns(2)
-    with p1:
+    if not _ready or df_results.empty:
+        st.info("⏳ กรุณากรอกข้อมูลชั้นดินให้ครบก่อน ระบบจะแสดงกราฟที่นี่", icon="🪨")
+    else:
+      p1, p2 = st.columns(2)
+      with p1:
         st.subheader("kh vs Depth")
         fig_kh = go.Figure()
         fig_kh.add_trace(go.Scatter(x=df_results["kh_x [kN/m³]"], y=df_results["Depth [m]"],
@@ -1072,7 +1090,7 @@ with tab3:
                              margin=dict(l=10, r=10, t=60, b=10))
         st.plotly_chart(fig_kh, use_container_width=True)
 
-    with p2:
+      with p2:
         st.subheader("Spring Stiffness vs Depth")
         fig_ks = go.Figure()
         fig_ks.add_trace(go.Scatter(x=df_results["Ksx [kN/m]"], y=df_results["Depth [m]"],
@@ -1087,7 +1105,6 @@ with tab3:
         fig_ks.add_trace(go.Scatter(x=[Kv_tip], y=[L], mode='markers', name='Kv_tip',
                                     marker=dict(color='#d62728', size=14, symbol='diamond'),
                                     hovertemplate=f'Kv_tip = {Kv_tip:,.0f} kN/m<extra></extra>'))
-        # ใช้ annotation พร้อมลูกศร แทน text บน marker (ไม่ทับเส้น)
         fig_ks.add_annotation(x=Kv_tip, y=L, ax=20, ay=-30,
                               xref='x', yref='y', axref='pixel', ayref='pixel',
                               text=f"<b>Kv_tip = {Kv_tip:,.0f}</b>",
@@ -1113,15 +1130,15 @@ with tab3:
                              margin=dict(l=10, r=10, t=60, b=10))
         st.plotly_chart(fig_ks, use_container_width=True)
 
-    st.subheader("β — Relative Stiffness")
-    if beta > 0:
+      st.subheader("β — Relative Stiffness")
+      if beta > 0:
         st.info(
             f"β = (kh·D / 4EpIp)^0.25 = **{beta:.4f} m⁻¹** | "
             f"1/β = **{1/beta:.2f} m** (characteristic length) | "
             f"Leff = 4/β = **{4/beta:.2f} m** | "
             f"{'✅ Long pile (L > 4/β)' if L > 4/beta else '⚠️ Short pile (L < 4/β)'}"
         )
-    else:
+      else:
         st.warning("β cannot be computed — kh เฉลี่ยเป็น 0 (ตรวจสอบ scour depth, soil profile)")
 
     st.divider()
@@ -1196,19 +1213,22 @@ with tab4:
     st.subheader("2. Minimum Longitudinal Reinforcement (อิงจาก Crack Control & ACI)")
     st.caption("สำหรับเสาเข็มที่ทนแรงด้านข้าง ค่า Min. As ไม่ใช่เพียง 1% ของ Ap ตาม ACI 10.5.1 แต่ควรควบคุมจาก Serviceability (Crack Width)")
 
-    st.write(f"**สภาพดินจาก Input:** kh ที่ผิวดิน = {kh_max_surface:,.0f} kN/m³ | kh ชั้นลึก = {kh_min_deep:,.0f} kN/m³")
-
-    if kh_max_surface <= 5000:
-        st.warning(f"🟠 **Soft Clay / Very Low kh:** แรงดันดินยังไม่สามารถรับแรงด้านข้างได้ดี ควรใช้ As >= **{as_ratio_rec*100:.1f}%** ของ Ap เพื่อควบคุมรอยร้าว")
-    elif kh_max_surface <= 15000:
-        st.success(f"🟢 **Medium Stiff Clay / Low kh:** ใช้ As >= **{as_ratio_rec*100:.1f}%** ของ Ap (ตาม ACI 10.5.1 ทั่วไป)")
+    if not _ready or df_results.empty:
+        st.info("⏳ กรุณากรอกข้อมูลชั้นดินให้ครบก่อน ระบบจะแสดงคำแนะนำที่นี่", icon="🪨")
     else:
-        st.success(f"🔵 **Stiff Clay / Sand (High kh):** ดินช่วยรับแรงได้ดี สามารถใช้ As >= **{as_ratio_rec*100:.1f}%** ของ Ap ได้")
+        st.write(f"**สภาพดินจาก Input:** kh ที่ผิวดิน = {kh_max_surface:,.0f} kN/m³ | kh ชั้นลึก = {kh_min_deep:,.0f} kN/m³")
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Ap [m²]", f"{Ap:.4f}")
-    c2.metric("Recommended As Ratio", f"{as_ratio_rec*100:.1f}%")
-    c3.metric("Min. As [m²]", f"{As_min:.4f}", help="ค่าพื้นที่เหล็กเสริมขั้นต่ำที่แนะนำสำหรับออกแบบ")
+        if kh_max_surface <= 5000:
+            st.warning(f"🟠 **Soft Clay / Very Low kh:** แรงดันดินยังไม่สามารถรับแรงด้านข้างได้ดี ควรใช้ As >= **{as_ratio_rec*100:.1f}%** ของ Ap เพื่อควบคุมรอยร้าว")
+        elif kh_max_surface <= 15000:
+            st.success(f"🟢 **Medium Stiff Clay / Low kh:** ใช้ As >= **{as_ratio_rec*100:.1f}%** ของ Ap (ตาม ACI 10.5.1 ทั่วไป)")
+        else:
+            st.success(f"🔵 **Stiff Clay / Sand (High kh):** ดินช่วยรับแรงได้ดี สามารถใช้ As >= **{as_ratio_rec*100:.1f}%** ของ Ap ได้")
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Ap [m²]", f"{Ap:.4f}")
+        c2.metric("Recommended As Ratio", f"{as_ratio_rec*100:.1f}%")
+        c3.metric("Min. As [m²]", f"{As_min:.4f}", help="ค่าพื้นที่เหล็กเสริมขั้นต่ำที่แนะนำสำหรับออกแบบ")
 
     st.divider()
     st.subheader("3. Shear Reinforcement (Links) Guidance")
