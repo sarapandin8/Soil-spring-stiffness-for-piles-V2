@@ -346,6 +346,7 @@ def autofill_soil_row(row_dict):
     return row_dict, False
 
 
+def pile_section_figure(pile_type, D, B, H, Ap, Ipx, Ipy, Ep, compact=False):
     """Pile cross-section figure with dimension annotations and axis labels"""
     fig = go.Figure()
     pad = max(D, B, H) * 0.7
