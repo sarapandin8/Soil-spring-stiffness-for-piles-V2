@@ -27,7 +27,7 @@ def _apply_pending_load():
     if "_pending_load" in st.session_state:
         pending = st.session_state.pop("_pending_load")
         # ล้าง widget-state ของ data_editor เพื่อบังคับให้ render DataFrame ใหม่
-        for w in ("soil_editor", "_soil_edited"):
+        for w in ("soil_editor", "_soil_edited", "_prev_type_cons"):
             if w in st.session_state:
                 del st.session_state[w]
         for k, v in pending.items():
@@ -40,7 +40,7 @@ def _apply_pending_profile():
         name = st.session_state.pop("_pending_profile")
         if name in SOIL_PROFILES:
             st.session_state.soil_layers = SOIL_PROFILES[name].copy()
-            for w in ("soil_editor", "_soil_edited"):
+            for w in ("soil_editor", "_soil_edited", "_prev_type_cons"):
                 if w in st.session_state:
                     del st.session_state[w]
             st.session_state["_just_profile_msg"] = f"✅ ใช้โปรไฟล์: {name}"
@@ -186,6 +186,15 @@ _apply_pending_profile()
 if 'soil_layers' not in st.session_state:
     st.session_state.soil_layers = SOIL_PROFILES["กรุงเทพฯ - โปรไฟล์ทั่วไป (General)"].copy()
 
+# _prev_type_cons: เก็บ (Soil_Type, Consistency) ของแต่ละแถวจาก rerun ที่แล้ว
+# ใช้ตรวจจับว่าผู้ใช้เปลี่ยนชนิดดิน → trigger auto-fill
+if "_prev_type_cons" not in st.session_state:
+    _init = st.session_state.soil_layers
+    st.session_state["_prev_type_cons"] = {
+        i: (str(r.get("Soil_Type", "")), str(r.get("Consistency", "")))
+        for i, r in _init.iterrows()
+    }
+
 # ─────────────────────────────────────────────
 #  ENGINEERING FUNCTIONS
 # ─────────────────────────────────────────────
@@ -294,11 +303,15 @@ def draw_spring(x0, x1, y, n_coils=7):
     return xs, ys
 
 def validate_soil_profile(df):
-    """ตรวจสอบ Gap / Overlap ในชั้นดิน"""
+    """ตรวจสอบ Gap / Overlap ในชั้นดิน — ข้ามแถวที่ยังกรอก Depth ไม่ครบ"""
     msgs = []
     if df is None or len(df) == 0:
         return ["⚠️ ไม่มีข้อมูลชั้นดิน"]
-    df_sorted = df.sort_values("Depth_From").reset_index(drop=True)
+    # กรองเฉพาะแถวที่มีค่า Depth_From และ Depth_To (ป้องกัน TypeError จากแถวว่าง)
+    df_valid = df.dropna(subset=["Depth_From", "Depth_To"]).copy()
+    if len(df_valid) == 0:
+        return []   # ยังไม่มีแถวสมบูรณ์ — ไม่แสดง warning
+    df_sorted = df_valid.sort_values("Depth_From").reset_index(drop=True)
     for i in range(len(df_sorted)):
         if df_sorted.loc[i, "Depth_To"] <= df_sorted.loc[i, "Depth_From"]:
             msgs.append(f"❌ แถวที่ {i+1}: Depth_To ({df_sorted.loc[i,'Depth_To']:.1f}) ต้องมากกว่า Depth_From ({df_sorted.loc[i,'Depth_From']:.1f})")
@@ -312,7 +325,27 @@ def validate_soil_profile(df):
                     msgs.append(f"⚠️ ชั้นดินซ้อนทับ (overlap) ระหว่างแถว {i} ถึง {i+1}: {curr_from:.1f} < {prev_to:.1f} m")
     return msgs
 
-def pile_section_figure(pile_type, D, B, H, Ap, Ipx, Ipy, Ep, compact=False):
+def autofill_soil_row(row_dict):
+    """ดึงค่า typical จาก SOIL_DB มาใส่ให้อัตโนมัติ เมื่อรู้ Soil_Type + Consistency
+    คืนค่า (filled_dict, did_fill:bool)"""
+    stype = str(row_dict.get("Soil_Type", "") or "")
+    cons  = str(row_dict.get("Consistency", "") or "")
+    if stype in SOIL_DB and cons in SOIL_DB[stype]:
+        db = SOIL_DB[stype][cons]
+        filled = dict(row_dict)
+        filled["SPT_N"] = float(db["N"])
+        filled["Es"]    = float(db["Es"])
+        filled["Gamma"] = float(db["Gamma"])
+        if stype == "Clay":
+            filled["cu"]  = float(db["cu"])
+            filled["phi"] = 0.0
+        else:   # Sand
+            filled["cu"]  = 0.0
+            filled["phi"] = float(db["phi"])
+        return filled, True
+    return row_dict, False
+
+
     """Pile cross-section figure with dimension annotations and axis labels"""
     fig = go.Figure()
     pad = max(D, B, H) * 0.7
@@ -680,9 +713,41 @@ with tab1:
                 "Gamma":        st.column_config.NumberColumn("γ [kN/m³]",  format="%.1f", width="small"),
             }
         )
-        # เก็บผลใน key แยก — ไม่เขียนกลับ soil_layers เพื่อตัด feedback loop
-        # (เดิม: st.session_state.soil_layers = edited_df  ← ตัวการ double-entry bug)
-        st.session_state["_soil_edited"] = edited_df
+        # ── AUTO-FILL: ตรวจจับการเปลี่ยน Soil_Type / Consistency → ดึงค่าจาก SOIL_DB ──
+        prev_tc   = st.session_state.get("_prev_type_cons", {})
+        new_tc    = {}
+        autofilled = edited_df.copy()
+        did_fill  = False
+
+        for idx, row in edited_df.iterrows():
+            stype = str(row.get("Soil_Type", "") or "")
+            cons  = str(row.get("Consistency", "") or "")
+            new_tc[idx] = (stype, cons)
+
+            # เงื่อนไข trigger: (1) Type/Consistency เปลี่ยน หรือ (2) เป็นแถวใหม่ที่มีค่าครบ
+            # และ (3) ค่านั้นมีอยู่ใน SOIL_DB
+            if (stype and cons
+                    and stype in SOIL_DB
+                    and cons in SOIL_DB.get(stype, {})
+                    and prev_tc.get(idx) != (stype, cons)):
+                filled_row, ok = autofill_soil_row(row.to_dict())
+                if ok:
+                    autofilled.loc[idx] = pd.Series(filled_row)
+                    did_fill = True
+
+        st.session_state["_prev_type_cons"] = new_tc
+
+        if did_fill:
+            # อัปเดต base + ล้าง editor state แล้ว rerun เพื่อแสดงค่าที่เติมแล้ว
+            st.session_state.soil_layers = autofilled
+            for w in ("soil_editor", "_soil_edited"):
+                if w in st.session_state:
+                    del st.session_state[w]
+            st.toast("✅ เติมค่าดินจาก SOIL_DB อัตโนมัติแล้ว", icon="🪨")
+            st.rerun()
+        else:
+            # ปกติ — เก็บผลใน key แยก ไม่เขียนกลับ soil_layers (ตัด feedback loop)
+            st.session_state["_soil_edited"] = edited_df
 
         # Validate soil layers
         _msgs = validate_soil_profile(edited_df)
