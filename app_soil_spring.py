@@ -34,14 +34,6 @@ def _apply_pending_load():
             st.session_state[k] = v
         st.session_state["_just_loaded_msg"] = pending.get("__msg__", "")
 
-def _apply_pending_reset():
-    """Reset ทุกค่ากลับเป็น default (เรียกก่อนสร้าง widget)"""
-    if st.session_state.pop("_pending_reset", False):
-        for k in list(st.session_state.keys()):
-            if k != "version":
-                del st.session_state[k]
-        st.session_state["_just_reset_msg"] = "↺ ล้างค่าทั้งหมดเรียบร้อย"
-
 def _apply_pending_profile():
     """ใช้ Predefined soil profile (เรียกก่อนสร้าง widget)"""
     if "_pending_profile" in st.session_state:
@@ -186,7 +178,6 @@ if 'version' not in st.session_state or st.session_state.version < VERSION:
     st.session_state.version = VERSION
 
 # ★ CRITICAL: ต้อง apply pending changes ก่อน widget ถูกสร้างทั้งหมด
-_apply_pending_reset()
 _apply_pending_load()
 _apply_pending_profile()
 
@@ -515,7 +506,6 @@ st.sidebar.markdown("---")
 
 # Show post-action messages (set by handlers above)
 for _msg_key, _box in (("_just_loaded_msg", st.sidebar.success),
-                      ("_just_reset_msg", st.sidebar.info),
                       ("_just_profile_msg", st.sidebar.success)):
     if _msg_key in st.session_state and st.session_state[_msg_key]:
         _box(st.session_state.pop(_msg_key))
@@ -663,24 +653,32 @@ with tab1:
         sand_opts = list(SOIL_DB["Sand"].keys())
         all_cons  = clay_opts + sand_opts
 
+        # ── FIX double-entry issue: บังคับ dtype ให้ตรงกับ column_config ก่อน ──
+        # st.data_editor จะ revert edit แรกถ้า dtype ไม่ตรง (เช่น int vs float)
+        _df_input = st.session_state.soil_layers.copy()
+        for _col in ["Depth_From", "Depth_To", "SPT_N", "Es", "cu", "phi", "Gamma"]:
+            if _col in _df_input.columns:
+                _df_input[_col] = pd.to_numeric(_df_input[_col], errors="coerce").astype(float)
+
         edited_df = st.data_editor(
-            st.session_state.soil_layers,
+            _df_input,
             num_rows="dynamic",
             use_container_width=True,
             key="soil_editor",
             column_config={
-                "Depth_From":   st.column_config.NumberColumn("From [m]",   format="%.1f", width="small"),
-                "Depth_To":     st.column_config.NumberColumn("To [m]",     format="%.1f", width="small"),
+                "Depth_From":   st.column_config.NumberColumn("From [m]",   format="%.2f", width="small"),
+                "Depth_To":     st.column_config.NumberColumn("To [m]",     format="%.2f", width="small"),
                 "Soil_Type":    st.column_config.SelectboxColumn("Type",    options=["Clay","Sand"], width="small"),
                 "Consistency":  st.column_config.SelectboxColumn("Consist.", options=all_cons, width="medium"),
-                "SPT_N":        st.column_config.NumberColumn("N-SPT",      min_value=0, max_value=200, width="small"),
-                "Es":           st.column_config.NumberColumn("Es [kPa]",   min_value=100, width="small"),
-                "cu":           st.column_config.NumberColumn("cu [kPa]",   min_value=0, width="small"),
-                "phi":          st.column_config.NumberColumn("φ [°]",      min_value=0, max_value=50, width="small"),
-                "Gamma":        st.column_config.NumberColumn("γ [kN/m³]",  min_value=10, max_value=25, width="small"),
+                "SPT_N":        st.column_config.NumberColumn("N-SPT",      format="%.0f", width="small"),
+                "Es":           st.column_config.NumberColumn("Es [kPa]",   format="%.0f", width="small"),
+                "cu":           st.column_config.NumberColumn("cu [kPa]",   format="%.1f", width="small"),
+                "phi":          st.column_config.NumberColumn("φ [°]",      format="%.1f", width="small"),
+                "Gamma":        st.column_config.NumberColumn("γ [kN/m³]",  format="%.1f", width="small"),
             }
         )
-        st.session_state.soil_layers = edited_df.copy()
+        # ไม่ต้อง .copy() — เก็บ object เดียวกันเพื่อไม่ให้ widget detect "input changed"
+        st.session_state.soil_layers = edited_df
 
         # Validate soil layers
         _msgs = validate_soil_profile(edited_df)
@@ -825,10 +823,7 @@ if uploaded_file is not None:
 
 # Reset all
 st.sidebar.markdown("---")
-if st.sidebar.button("🧹 Reset All Inputs", use_container_width=True,
-                     help="ล้างค่าทุกอย่างกลับสู่ค่าเริ่มต้น"):
-    st.session_state["_pending_reset"] = True
-    st.rerun()
+st.sidebar.caption(f"App Version {VERSION}")
 
 # ════════ TAB 2 — RESULTS & PROFILE ════════
 with tab2:
