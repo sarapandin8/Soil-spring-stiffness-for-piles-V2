@@ -27,7 +27,7 @@ def _apply_pending_load():
     if "_pending_load" in st.session_state:
         pending = st.session_state.pop("_pending_load")
         # ล้าง widget-state ของ data_editor เพื่อบังคับให้ render DataFrame ใหม่
-        for w in ("soil_editor",):
+        for w in ("soil_editor", "_soil_edited"):
             if w in st.session_state:
                 del st.session_state[w]
         for k, v in pending.items():
@@ -40,8 +40,9 @@ def _apply_pending_profile():
         name = st.session_state.pop("_pending_profile")
         if name in SOIL_PROFILES:
             st.session_state.soil_layers = SOIL_PROFILES[name].copy()
-            if "soil_editor" in st.session_state:
-                del st.session_state["soil_editor"]
+            for w in ("soil_editor", "_soil_edited"):
+                if w in st.session_state:
+                    del st.session_state[w]
             st.session_state["_just_profile_msg"] = f"✅ ใช้โปรไฟล์: {name}"
 
 # ─────────────────────────────────────────────
@@ -660,6 +661,8 @@ with tab1:
             if _col in _df_input.columns:
                 _df_input[_col] = pd.to_numeric(_df_input[_col], errors="coerce").astype(float)
 
+        # ── ส่ง _df_input เข้า editor โดยไม่ต้องเขียนกลับเข้า soil_layers ──
+        # (soil_layers ใช้เป็น "base for reset" เท่านั้น ไม่ update ทุก rerun)
         edited_df = st.data_editor(
             _df_input,
             num_rows="dynamic",
@@ -677,8 +680,9 @@ with tab1:
                 "Gamma":        st.column_config.NumberColumn("γ [kN/m³]",  format="%.1f", width="small"),
             }
         )
-        # ไม่ต้อง .copy() — เก็บ object เดียวกันเพื่อไม่ให้ widget detect "input changed"
-        st.session_state.soil_layers = edited_df
+        # เก็บผลใน key แยก — ไม่เขียนกลับ soil_layers เพื่อตัด feedback loop
+        # (เดิม: st.session_state.soil_layers = edited_df  ← ตัวการ double-entry bug)
+        st.session_state["_soil_edited"] = edited_df
 
         # Validate soil layers
         _msgs = validate_soil_profile(edited_df)
@@ -690,7 +694,7 @@ with tab1:
 # ─────────────────────────────────────────────
 #  MAIN CALCULATION
 # ─────────────────────────────────────────────
-df_soil = st.session_state.soil_layers
+df_soil = st.session_state.get("_soil_edited", st.session_state.soil_layers)
 depths  = np.arange(0, L + 1e-9, node_spacing)
 results = []
 
@@ -782,7 +786,7 @@ st.sidebar.header("6. Save / Load Project")
 project_data = save_project_to_dict(
     design_stage, method, pile_type, D, B, H, L, fc, node_spacing, nu,
     water_table, scour_depth, use_group, s_D, nx, ny,
-    st.session_state.soil_layers, VERSION
+    st.session_state.get("_soil_edited", st.session_state.soil_layers), VERSION
 )
 json_str = json.dumps(project_data, indent=2, ensure_ascii=False)
 st.sidebar.download_button(
