@@ -820,9 +820,16 @@ if not _ready:
     beta  = 0.0; kh_avg = 0.0
     kh_max_surface = kh_min_deep = as_ratio_rec = As_min = 0.0
 else:
+    # กรองเฉพาะแถวที่มีข้อมูลครบก่อนคำนวณ — ตัดแถวที่กำลังพิมพ์ค้างออก
+    _req = ["Depth_From", "Depth_To", "Soil_Type", "SPT_N"]
+    df_soil_calc = df_soil.dropna(subset=_req).copy()
+    df_soil_calc = df_soil_calc[
+        df_soil_calc["Soil_Type"].astype(str).str.strip().isin(["Clay", "Sand"])
+    ].reset_index(drop=True)
+
     for z in depths:
-        mask  = (df_soil["Depth_From"] <= z) & (df_soil["Depth_To"] > z)
-        layer = df_soil[mask].iloc[0] if mask.any() else df_soil.iloc[-1]
+        mask  = (df_soil_calc["Depth_From"] <= z) & (df_soil_calc["Depth_To"] > z)
+        layer = df_soil_calc[mask].iloc[0] if mask.any() else df_soil_calc.iloc[-1]
 
         soil_type   = layer["Soil_Type"]
         N_val       = float(layer["SPT_N"])
@@ -873,7 +880,7 @@ else:
         })
 
     df_results = pd.DataFrame(results)
-    N_tip          = float(df_soil.iloc[-1]["SPT_N"])
+    N_tip          = float(df_soil_calc.iloc[-1]["SPT_N"])
     Kv_tip, kv_tip = calc_kv_tip(N_tip, max(Deq_x, Deq_y), Ap, design_stage)
 
     # β — use Ipy for X-direction (bend about Y-axis)
