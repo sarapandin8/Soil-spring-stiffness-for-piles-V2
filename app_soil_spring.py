@@ -761,90 +761,149 @@ with tab1:
 #  MAIN CALCULATION
 # ─────────────────────────────────────────────
 df_soil = st.session_state.get("_soil_edited", st.session_state.soil_layers)
+
+# ── ตรวจสอบความสมบูรณ์ของข้อมูลดินก่อนคำนวณ ──
+_REQUIRED_COLS = {
+    "Depth_From": "ความลึกเริ่มต้น (From)",
+    "Depth_To":   "ความลึกสิ้นสุด (To)",
+    "Soil_Type":  "ประเภทดิน (Type)",
+    "SPT_N":      "ค่า N-SPT",
+}
+_ready = True
+
+# กรองเฉพาะแถวที่กรอกข้อมูลบางส่วน (ไม่ใช่แถวว่างทั้งหมด)
+_df_check = df_soil.dropna(how="all").copy()
+
+if len(_df_check) == 0:
+    st.warning("⚠️ กรุณากรอกข้อมูลชั้นดินอย่างน้อย 1 ชั้น ก่อนคำนวณ", icon="🪨")
+    _ready = False
+else:
+    _incomplete = []
+    for _i, _row in _df_check.iterrows():
+        _missing = []
+        for _col, _label in _REQUIRED_COLS.items():
+            _v = _row.get(_col, None)
+            if _v is None or (isinstance(_v, float) and np.isnan(_v)) or str(_v).strip() in ("", "None"):
+                _missing.append(_label)
+        if _missing:
+            _row_no = _i + 1
+            _depth_label = (f"From {_row.get('Depth_From','?')} m"
+                            if not pd.isna(_row.get("Depth_From")) else f"แถวที่ {_row_no}")
+            _incomplete.append(f"• **{_depth_label}** — ขาด: {', '.join(_missing)}")
+
+    if _incomplete:
+        st.warning(
+            "⚠️ **ข้อมูลชั้นดินยังกรอกไม่ครบ** กรุณาเติมค่าที่ขาดก่อนระบบจะคำนวณ:\n\n"
+            + "\n".join(_incomplete),
+            icon="🪨"
+        )
+        _ready = False
+
+    # ตรวจว่า pile ยาวกว่าชั้นดินที่กำหนดหรือเปล่า
+    if _ready:
+        _df_valid = _df_check.dropna(subset=["Depth_From", "Depth_To"])
+        _max_depth = _df_valid["Depth_To"].max() if len(_df_valid) > 0 else 0
+        if L > _max_depth + 1e-3:
+            st.warning(
+                f"⚠️ ความยาวเสาเข็ม **L = {L:.1f} m** เกินกว่าข้อมูลดินที่กรอก "
+                f"(ลึกสุด {_max_depth:.1f} m) — "
+                f"ระบบจะใช้ชั้นดินล่างสุดแทนสำหรับส่วนที่เกิน",
+                icon="⚠️"
+            )
+
 depths  = np.arange(0, L + 1e-9, node_spacing)
 results = []
 
-for z in depths:
-    mask  = (df_soil["Depth_From"] <= z) & (df_soil["Depth_To"] > z)
-    layer = df_soil[mask].iloc[0] if mask.any() else df_soil.iloc[-1]
-
-    soil_type   = layer["Soil_Type"]
-    N_val       = float(layer["SPT_N"])
-    below_water = z > water_table
-    z_mid       = max(z - node_spacing / 2, 0.05)
-
-    if z < scour_depth:
-        kh_x = kh_y = E0 = 0.0
-        pu = np.nan
-    else:
-        pu = np.nan
-        if method == "JRA":
-            kh_x, E0 = calc_kh_jra(N_val, Deq_x, design_stage, soil_type, below_water)
-            kh_y, _  = calc_kh_jra(N_val, Deq_y, design_stage, soil_type, below_water)
-        elif method == "Terzaghi":
-            kh_x = calc_kh_terzaghi(N_val, soil_type, Deq_x, z_mid, below_water)
-            kh_y = calc_kh_terzaghi(N_val, soil_type, Deq_y, z_mid, below_water)
-            E0 = 2800 * N_val
-        elif method == "Vesic 1961":
-            Es_kPa = float(layer.get("Es", 20000))
-            if soil_type == "Sand" and below_water:
-                Es_kPa *= 0.6
-            # X-loading → bend about Y-axis → use Ipy
-            kh_x = calc_kh_vesic(Es_kPa, Deq_x, Ep, Ipy, nu)
-            kh_y = calc_kh_vesic(Es_kPa, Deq_y, Ep, Ipx, nu)
-            E0 = Es_kPa
-        else:  # Broms
-            gamma_v = float(layer.get("Gamma", 18))
-            gamma_eff = gamma_v - 10 if below_water else gamma_v
-            cu  = float(layer.get("cu",  6.25*N_val)) if soil_type == "Clay" else None
-            phi = float(layer.get("phi", 28)) if soil_type == "Sand" else None
-            kh_x, pu = calc_kh_broms(soil_type, N_val, z, Deq_x, gamma_eff, phi, cu)
-            kh_y, _  = calc_kh_broms(soil_type, N_val, z, Deq_y, gamma_eff, phi, cu)
-            E0 = float(layer.get("Es", 20000))
-
-    Ksx = kh_x * Deq_x * node_spacing * Pmult
-    Ksy = kh_y * Deq_y * node_spacing * Pmult
-
-    results.append({
-        "Node":         int(round(z / node_spacing)),
-        "Depth [m]":    round(z, 3),
-        "Soil_Type":    soil_type,
-        "N-SPT":        N_val,
-        "kh_x [kN/m³]": round(kh_x, 1),
-        "kh_y [kN/m³]": round(kh_y, 1),
-        "Ksx [kN/m]":   round(Ksx, 1),
-        "Ksy [kN/m]":   round(Ksy, 1),
-        "pu [kN/m]":    round(pu, 1) if not np.isnan(pu) else np.nan,
-    })
-
-df_results = pd.DataFrame(results)
-N_tip          = float(df_soil.iloc[-1]["SPT_N"])
-Kv_tip, kv_tip = calc_kv_tip(N_tip, max(Deq_x, Deq_y), Ap, design_stage)
-
-# β — use Ipy for X-direction (bend about Y-axis)
-Ip_for_beta = Ipy if not pile_is_round else Ipx
-kh_avg = df_results["kh_x [kN/m³]"].replace(0, np.nan).mean()
-if pd.isna(kh_avg) or kh_avg <= 0 or Ep * Ip_for_beta <= 0:
-    beta = 0.0
+if not _ready:
+    df_results = pd.DataFrame()
+    N_tip = 0.0; Kv_tip = 0.0; kv_tip = 0.0
+    beta  = 0.0; kh_avg = 0.0
+    kh_max_surface = kh_min_deep = as_ratio_rec = As_min = 0.0
 else:
-    beta = (kh_avg * Deq_x / (4 * Ep * Ip_for_beta))**0.25
+    for z in depths:
+        mask  = (df_soil["Depth_From"] <= z) & (df_soil["Depth_To"] > z)
+        layer = df_soil[mask].iloc[0] if mask.any() else df_soil.iloc[-1]
 
-kh_max_surface, kh_min_deep, as_ratio_rec, As_min = calculate_rebar_params(df_results, Ap)
+        soil_type   = layer["Soil_Type"]
+        N_val       = float(layer["SPT_N"])
+        below_water = z > water_table
+        z_mid       = max(z - node_spacing / 2, 0.05)
+
+        if z < scour_depth:
+            kh_x = kh_y = E0 = 0.0
+            pu = np.nan
+        else:
+            pu = np.nan
+            if method == "JRA":
+                kh_x, E0 = calc_kh_jra(N_val, Deq_x, design_stage, soil_type, below_water)
+                kh_y, _  = calc_kh_jra(N_val, Deq_y, design_stage, soil_type, below_water)
+            elif method == "Terzaghi":
+                kh_x = calc_kh_terzaghi(N_val, soil_type, Deq_x, z_mid, below_water)
+                kh_y = calc_kh_terzaghi(N_val, soil_type, Deq_y, z_mid, below_water)
+                E0 = 2800 * N_val
+            elif method == "Vesic 1961":
+                Es_kPa = float(layer.get("Es", 20000))
+                if soil_type == "Sand" and below_water:
+                    Es_kPa *= 0.6
+                kh_x = calc_kh_vesic(Es_kPa, Deq_x, Ep, Ipy, nu)
+                kh_y = calc_kh_vesic(Es_kPa, Deq_y, Ep, Ipx, nu)
+                E0 = Es_kPa
+            else:  # Broms
+                gamma_v = float(layer.get("Gamma", 18))
+                gamma_eff = gamma_v - 10 if below_water else gamma_v
+                cu  = float(layer.get("cu",  6.25*N_val)) if soil_type == "Clay" else None
+                phi = float(layer.get("phi", 28)) if soil_type == "Sand" else None
+                kh_x, pu = calc_kh_broms(soil_type, N_val, z, Deq_x, gamma_eff, phi, cu)
+                kh_y, _  = calc_kh_broms(soil_type, N_val, z, Deq_y, gamma_eff, phi, cu)
+                E0 = float(layer.get("Es", 20000))
+
+        Ksx = kh_x * Deq_x * node_spacing * Pmult
+        Ksy = kh_y * Deq_y * node_spacing * Pmult
+
+        results.append({
+            "Node":         int(round(z / node_spacing)),
+            "Depth [m]":    round(z, 3),
+            "Soil_Type":    soil_type,
+            "N-SPT":        N_val,
+            "kh_x [kN/m³]": round(kh_x, 1),
+            "kh_y [kN/m³]": round(kh_y, 1),
+            "Ksx [kN/m]":   round(Ksx, 1),
+            "Ksy [kN/m]":   round(Ksy, 1),
+            "pu [kN/m]":    round(pu, 1) if not np.isnan(pu) else np.nan,
+        })
+
+    df_results = pd.DataFrame(results)
+    N_tip          = float(df_soil.iloc[-1]["SPT_N"])
+    Kv_tip, kv_tip = calc_kv_tip(N_tip, max(Deq_x, Deq_y), Ap, design_stage)
+
+    # β — use Ipy for X-direction (bend about Y-axis)
+    Ip_for_beta = Ipy if not pile_is_round else Ipx
+    kh_avg = df_results["kh_x [kN/m³]"].replace(0, np.nan).mean()
+    if pd.isna(kh_avg) or kh_avg <= 0 or Ep * Ip_for_beta <= 0:
+        beta = 0.0
+    else:
+        beta = (kh_avg * Deq_x / (4 * Ep * Ip_for_beta))**0.25
+
+    kh_max_surface, kh_min_deep, as_ratio_rec, As_min = calculate_rebar_params(df_results, Ap)
 
 # ── Sidebar Export ──
 st.sidebar.header("5. Export")
-excel_data = build_excel(
-    df_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
-    node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta,
-    kh_max_surface, kh_min_deep, as_ratio_rec, As_min
-)
-st.sidebar.download_button(
-    "📥 Download Excel (.xlsx)",
-    data=excel_data,
-    file_name=f"PileSpring_{method}.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    use_container_width=True
-)
+if _ready:
+    excel_data = build_excel(
+        df_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
+        node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta,
+        kh_max_surface, kh_min_deep, as_ratio_rec, As_min
+    )
+    st.sidebar.download_button(
+        "📥 Download Excel (.xlsx)",
+        data=excel_data,
+        file_name=f"PileSpring_{method}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
+else:
+    st.sidebar.button("📥 Download Excel (.xlsx)", disabled=True, use_container_width=True,
+                      help="กรุณากรอกข้อมูลชั้นดินให้ครบก่อน")
 
 # ── SAVE / LOAD PROJECT ──
 st.sidebar.header("6. Save / Load Project")
