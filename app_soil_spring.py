@@ -3,10 +3,85 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from io import BytesIO
+import json
 
 st.set_page_config(page_title="Pile Soil Spring Calculator", layout="wide", page_icon="🏗️")
 
-VERSION = 7
+VERSION = 8
+
+# ─────────────────────────────────────────────
+#  SAVE / LOAD PROJECT FUNCTIONS
+# ─────────────────────────────────────────────
+def save_project_to_dict(
+    design_stage, method, pile_type, D, B, H, L, fc, node_spacing, nu,
+    water_table, scour_depth, use_group, s_D, nx, ny,
+    soil_layers, app_version
+):
+    """Create a dictionary with all project parameters for saving"""
+    return {
+        "app_version": app_version,
+        "design_stage": design_stage,
+        "method": method,
+        "pile_type": pile_type,
+        "D": float(D),
+        "B": float(B),
+        "H": float(H),
+        "L": float(L),
+        "fc": float(fc),
+        "node_spacing": float(node_spacing),
+        "nu": float(nu),
+        "water_table": float(water_table),
+        "scour_depth": float(scour_depth),
+        "use_group": bool(use_group),
+        "s_D": float(s_D),
+        "nx": int(nx),
+        "ny": int(ny),
+        "soil_layers": soil_layers.to_dict(orient="records"),
+        "saved_timestamp": pd.Timestamp.now().isoformat(),
+    }
+
+def load_project_from_dict(data):
+    """Load project parameters from dictionary and return session_state updates"""
+    updates = {}
+
+    # Map JSON keys to session_state keys
+    key_map = {
+        "design_stage": "stage",
+        "method": "method",
+        "pile_type": "pile_type",
+        "D": "D",
+        "B": "B",
+        "H": "H",
+        "L": "L",
+        "fc": "fc",
+        "node_spacing": "dl",
+        "nu": "nu",
+        "water_table": "wt",
+        "scour_depth": "scour",
+        "use_group": "use_group",
+        "s_D": "sD",
+        "nx": "nx",
+        "ny": "ny",
+    }
+
+    for json_key, st_key in key_map.items():
+        if json_key in data:
+            updates[st_key] = data[json_key]
+
+    # Rebuild soil layers DataFrame
+    if "soil_layers" in data and len(data["soil_layers"]) > 0:
+        df = pd.DataFrame(data["soil_layers"])
+        # Ensure column types
+        for col in ["Depth_From", "Depth_To", "SPT_N", "Es", "cu", "phi", "Gamma"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        updates["soil_layers"] = df
+
+    return updates
+
+# ─────────────────────────────────────────────
+#  SESSION STATE & DEFAULTS
+# ─────────────────────────────────────────────
 if 'version' not in st.session_state or st.session_state.version < VERSION:
     st.session_state.clear()
     st.session_state.version = VERSION
@@ -628,6 +703,53 @@ st.sidebar.download_button(
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     use_container_width=True
 )
+
+# ── SAVE / LOAD PROJECT ──
+st.sidebar.header("6. Save / Load Project")
+st.sidebar.markdown("💾 **SAVE:** บันทึกพารามิเตอร์ทั้งหมดเป็นไฟล์ JSON")
+st.sidebar.markdown("📂 **OPEN:** โหลดไฟล์ที่บันทึกไว้กลับมาใช้งาน")
+
+# Default values for group effect if not enabled
+_default_s_D = st.session_state.get("sD", 3.0)
+_default_nx = st.session_state.get("nx", 3)
+_default_ny = st.session_state.get("ny", 3)
+
+# SAVE button
+project_data = save_project_to_dict(
+    design_stage, method, pile_type, D, B, H, L, fc, node_spacing, nu,
+    water_table, scour_depth, use_group, _default_s_D, _default_nx, _default_ny,
+    st.session_state.soil_layers, VERSION
+)
+json_str = json.dumps(project_data, indent=2, ensure_ascii=False)
+st.sidebar.download_button(
+    "💾 SAVE Project (.json)",
+    data=json_str,
+    file_name=f"PileProject_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.json",
+    mime="application/json",
+    use_container_width=True
+)
+
+# OPEN button with file uploader
+st.sidebar.markdown("---")
+uploaded_file = st.sidebar.file_uploader(
+    "📂 OPEN Project File",
+    type=["json"],
+    help="เลือกไฟล์ .json ที่บันทึกไว้จากปุ่ม SAVE ด้านบน"
+)
+
+if uploaded_file is not None:
+    try:
+        loaded_data = json.load(uploaded_file)
+        updates = load_project_from_dict(loaded_data)
+
+        # Apply all updates to session_state
+        for key, value in updates.items():
+            st.session_state[key] = value
+
+        st.sidebar.success(f"✅ โหลดโปรเจกต์สำเร็จ!\n📅 บันทึกเมื่อ: {loaded_data.get('saved_timestamp', 'N/A')[:19]}")
+        st.rerun()
+    except Exception as e:
+        st.sidebar.error(f"❌ ไม่สามารถโหลดไฟล์ได้: {str(e)}")
 
 # ══════════════════════════════════════════════
 #  TAB 2  —  RESULTS TABLE + PROFILE
