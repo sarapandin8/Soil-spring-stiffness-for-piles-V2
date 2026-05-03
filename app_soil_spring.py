@@ -611,6 +611,14 @@ def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx,
                 node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta,
                 kh_max_surface, kh_min_deep, as_ratio_rec, As_min, use_group, spring_output):
     """Build Excel file with all calculation results"""
+    try:
+        import xlsxwriter  # noqa: F401
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Missing Excel export dependency: XlsxWriter. "
+            "Install project requirements with: pip install -r requirements.txt"
+        ) from exc
+
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         wb = writer.book
@@ -1167,18 +1175,21 @@ else:
 # ── Sidebar Export ──
 st.sidebar.header("5. Export")
 if _ready:
-    excel_data = build_excel(
-        df_results, df_row_results, df_soil_draw, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
-        node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta,
-        kh_max_surface, kh_min_deep, as_ratio_rec, As_min, use_group, spring_output
-    )
-    st.sidebar.download_button(
-        "📥 Download Excel (.xlsx)",
-        data=excel_data,
-        file_name=f"PileSpring_{method}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True
-    )
+    try:
+        excel_data = build_excel(
+            df_results, df_row_results, df_soil_draw, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
+            node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta,
+            kh_max_surface, kh_min_deep, as_ratio_rec, As_min, use_group, spring_output
+        )
+        st.sidebar.download_button(
+            "📥 Download Excel (.xlsx)",
+            data=excel_data,
+            file_name=f"PileSpring_{method}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+    except RuntimeError as e:
+        st.sidebar.error(str(e))
 else:
     st.sidebar.button("📥 Download Excel (.xlsx)", disabled=True, use_container_width=True,
                       help="กรุณากรอกข้อมูลชั้นดินให้ครบก่อน")
@@ -1238,7 +1249,10 @@ with tab2:
     mc[0].metric("Method", method)
     mc[1].metric("β [1/m]",       f"{beta:.3f}"   if (_ready and beta > 0) else "—")
     mc[2].metric("Kv_tip [kN/m]", f"{Kv_tip:,.0f}" if _ready else "—")
-    mc[3].metric("p-mult",        f"{Pmult:.3f}")
+    if use_group and spring_output == "Row-based spring table":
+        mc[3].metric("p-mult", "Row-based")
+    else:
+        mc[3].metric("Avg p-mult", f"{Pmult:.3f}")
     mc[4].metric("Nodes",         len(depths) if _ready else "—")
     st.divider()
 
@@ -1337,7 +1351,7 @@ with tab3:
     else:
       p1, p2 = st.columns(2)
       with p1:
-        st.subheader("kh vs Depth (Global Average)")
+        st.subheader("kh vs Depth (Base kh before p-mult)")
         fig_kh = go.Figure()
         fig_kh.add_trace(go.Scatter(x=df_results["kh_x [kN/m³]"], y=df_results["Depth [m]"],
                                     mode='lines+markers', name='kh_x',
@@ -1543,7 +1557,8 @@ with tab6:
     ### 📝 Convention Notes
     - **Loading width convention** (this app): X-loading uses $D_x = B$, Y-loading uses $D_y = H$ — JRA-style
     - **For X-direction loading:** pile bends about Y-axis → $I_p = I_y$ (used in $\\beta$ and Vesic)
-    - **Group p-multiplier $f_m$** averaged across all piles (single multiplier applied to every spring)
+    - **Global Average spring:** uses average group p-multiplier $P_{mult}$ for $K_{sx}$ and $K_{sy}$ (single global spring per depth)
+    - **Row-based spring table:** uses row-specific $f_m$ for each loading direction and row number; $K_{spring}=k_h \\cdot D_{eq} \\cdot L_{trib} \\cdot f_m$
     - **Sand below water table:** $E_0 \\times 0.6$ for JRA (built-in); Vesic uses $E_s \\times 0.6$ likewise
 
     ### 📚 References
