@@ -1337,7 +1337,7 @@ with tab3:
     else:
       p1, p2 = st.columns(2)
       with p1:
-        st.subheader("kh vs Depth")
+        st.subheader("kh vs Depth (Global Average)")
         fig_kh = go.Figure()
         fig_kh.add_trace(go.Scatter(x=df_results["kh_x [kN/m³]"], y=df_results["Depth [m]"],
                                     mode='lines+markers', name='kh_x',
