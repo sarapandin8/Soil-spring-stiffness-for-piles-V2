@@ -227,14 +227,17 @@ def get_nh_terzaghi(N, below_water):
     elif N < 30: return 12000 if below_water else 21000
     else:        return 34000 if below_water else 56000
 
-def calc_kh_terzaghi(N, soil_type, D, z_mid, below_water):
+def calc_kh_terzaghi(N, soil_type, D, z_mid, below_water, cu=None):
     """Terzaghi (1955) / Bowles (1997): Sand kh=nh·z/D  |  Clay kh=α·cu/D"""
     if soil_type == "Sand":
         nh = get_nh_terzaghi(N, below_water)
         z_use = max(z_mid, 0.1)
         kh = nh * z_use / D
     else:
-        cu = 6.25 * N
+        if cu is None or pd.isna(cu) or float(cu) <= 0:
+            cu = 6.25 * N
+        else:
+            cu = float(cu)
         alpha = get_alpha_clay(N)
         kh = alpha * cu / D
     return kh
@@ -294,6 +297,21 @@ def calc_kv_tip(N_tip, D, Ap, design_stage):
     kv = (E0 / B0) * (D / B0)**(-0.75) / 3.0
     Kv_tip = kv * Ap
     return Kv_tip, kv
+
+def calc_tributary_lengths(depths, L):
+    """Tributary pile length represented by each lateral spring node."""
+    depths = np.asarray(depths, dtype=float)
+    if len(depths) == 0:
+        return np.array([], dtype=float)
+    if len(depths) == 1:
+        return np.array([float(L)], dtype=float)
+
+    tribs = []
+    for i, z in enumerate(depths):
+        left = 0.0 if i == 0 else (depths[i - 1] + z) / 2.0
+        right = float(L) if i == len(depths) - 1 else (z + depths[i + 1]) / 2.0
+        tribs.append(max(right - left, 0.0))
+    return np.asarray(tribs, dtype=float)
 
 def draw_spring(x0, x1, y, n_coils=7):
     """Zigzag spring symbol between x0 and x1 at depth y"""
@@ -425,6 +443,149 @@ def pile_section_figure(pile_type, D, B, H, Ap, Ipx, Ipy, Ep, compact=False):
                                  gridcolor='rgba(180,180,180,0.3)'),
                       height=h, margin=dict(l=10, r=10, t=40, b=10),
                       plot_bgcolor='rgba(245,248,255,0.8)')
+    return fig
+
+def pile_group_plan_figure(pile_type, D, B, H, s_D, nx, ny, use_group):
+    """Plan view of pile group layout with global X/Y axes."""
+    fig = go.Figure()
+    nx_plot = int(nx) if use_group else 1
+    ny_plot = int(ny) if use_group else 1
+    nx_plot = max(nx_plot, 1)
+    ny_plot = max(ny_plot, 1)
+
+    spacing = max(float(s_D), 1.0) * float(D)
+    xs = (np.arange(nx_plot) - (nx_plot - 1) / 2.0) * spacing
+    ys = (np.arange(ny_plot) - (ny_plot - 1) / 2.0) * spacing
+
+    pile_w = float(D) if pile_type == "Round" else float(B)
+    pile_h = float(D) if pile_type == "Round" else float(H)
+    pile_radius = max(pile_w, pile_h) / 2.0
+
+    for iy, y in enumerate(ys):
+        for ix, x in enumerate(xs):
+            label = f"P{iy + 1}-{ix + 1}"
+            if pile_type == "Round":
+                fig.add_shape(
+                    type="circle",
+                    x0=x - pile_w / 2, x1=x + pile_w / 2,
+                    y0=y - pile_h / 2, y1=y + pile_h / 2,
+                    line=dict(color="#1a4f8a", width=2),
+                    fillcolor="rgba(100,160,220,0.38)",
+                    layer="above",
+                )
+            else:
+                fig.add_shape(
+                    type="rect",
+                    x0=x - pile_w / 2, x1=x + pile_w / 2,
+                    y0=y - pile_h / 2, y1=y + pile_h / 2,
+                    line=dict(color="#1a4f8a", width=2),
+                    fillcolor="rgba(100,160,220,0.38)",
+                    layer="above",
+                )
+            fig.add_annotation(
+                x=x, y=y, text=f"<b>{label}</b>", showarrow=False,
+                font=dict(size=10, color="#1a4f8a"),
+            )
+
+    x_extent = (xs[-1] - xs[0]) / 2.0 + pile_radius
+    y_extent = (ys[-1] - ys[0]) / 2.0 + pile_radius
+    lim = max(x_extent, y_extent, spacing, D) * 1.45
+    axis_len = lim * 0.72
+
+    fig.add_annotation(
+        ax=0, ay=0, x=axis_len, y=0,
+        xref="x", yref="y", axref="x", ayref="y",
+        arrowhead=3, arrowsize=1.2, arrowwidth=2.5,
+        arrowcolor="#222222", showarrow=True,
+    )
+    fig.add_annotation(
+        x=axis_len * 1.06, y=0, text="<b>X</b>", showarrow=False,
+        font=dict(size=15, color="#222222", family="Arial Black"),
+    )
+    fig.add_annotation(
+        ax=0, ay=0, x=0, y=axis_len,
+        xref="x", yref="y", axref="x", ayref="y",
+        arrowhead=3, arrowsize=1.2, arrowwidth=2.5,
+        arrowcolor="#222222", showarrow=True,
+    )
+    fig.add_annotation(
+        x=0, y=axis_len * 1.08, text="<b>Y</b>", showarrow=False,
+        font=dict(size=15, color="#222222", family="Arial Black"),
+    )
+    fig.add_trace(go.Scatter(
+        x=[0], y=[0], mode="markers",
+        marker=dict(color="red", size=10, symbol="x"),
+        showlegend=False, hoverinfo="skip",
+    ))
+    fig.add_annotation(
+        x=lim * 0.95, y=lim * 0.90,
+        text=(
+            f"<b>{nx_plot} x {ny_plot} piles</b><br>"
+            f"s/D = {float(s_D):.2f}<br>"
+            f"spacing = {spacing:.2f} m"
+        ),
+        showarrow=False, align="left",
+        bgcolor="rgba(255,255,255,0.88)",
+        bordercolor="#aaa", borderwidth=1, borderpad=6,
+        font=dict(size=11),
+    )
+
+    if nx_plot > 1:
+        y_dim = ys[0] - pile_h / 2 - 0.22 * lim
+        fig.add_annotation(
+            ax=xs[0], ay=y_dim, x=xs[1], y=y_dim,
+            xref="x", yref="y", axref="x", ayref="y",
+            arrowhead=3, arrowsize=1.0, arrowwidth=1.4,
+            arrowcolor="#1a4f8a", showarrow=True,
+        )
+        fig.add_annotation(
+            ax=xs[1], ay=y_dim, x=xs[0], y=y_dim,
+            xref="x", yref="y", axref="x", ayref="y",
+            arrowhead=3, arrowsize=1.0, arrowwidth=1.4,
+            arrowcolor="#1a4f8a", showarrow=True,
+        )
+        fig.add_annotation(
+            x=(xs[0] + xs[1]) / 2, y=y_dim,
+            text=f"<b>{spacing:.2f} m</b>", showarrow=False,
+            yshift=-14, font=dict(size=10, color="#1a4f8a"),
+        )
+
+    if ny_plot > 1:
+        x_dim = xs[-1] + pile_w / 2 + 0.22 * lim
+        fig.add_annotation(
+            ax=x_dim, ay=ys[0], x=x_dim, y=ys[1],
+            xref="x", yref="y", axref="x", ayref="y",
+            arrowhead=3, arrowsize=1.0, arrowwidth=1.4,
+            arrowcolor="#c0392b", showarrow=True,
+        )
+        fig.add_annotation(
+            ax=x_dim, ay=ys[1], x=x_dim, y=ys[0],
+            xref="x", yref="y", axref="x", ayref="y",
+            arrowhead=3, arrowsize=1.0, arrowwidth=1.4,
+            arrowcolor="#c0392b", showarrow=True,
+        )
+        fig.add_annotation(
+            x=x_dim, y=(ys[0] + ys[1]) / 2,
+            text=f"<b>{spacing:.2f} m</b>", showarrow=False,
+            xshift=28, font=dict(size=10, color="#c0392b"),
+        )
+
+    fig.update_layout(
+        title=dict(text="Pile Group Plan View", font=dict(size=14, color="#1a4f8a")),
+        xaxis=dict(
+            title="X [m]", scaleanchor="y", scaleratio=1, range=[-lim, lim],
+            zeroline=True, zerolinecolor="rgba(80,80,80,0.45)",
+            showgrid=True, gridcolor="rgba(180,180,180,0.28)",
+        ),
+        yaxis=dict(
+            title="Y [m]", range=[-lim, lim],
+            zeroline=True, zerolinecolor="rgba(80,80,80,0.45)",
+            showgrid=True, gridcolor="rgba(180,180,180,0.28)",
+        ),
+        height=420,
+        margin=dict(l=10, r=10, t=40, b=10),
+        plot_bgcolor="rgba(245,248,255,0.8)",
+    )
     return fig
 
 def calculate_rebar_params(df_results, Ap):
@@ -675,6 +836,15 @@ with tab1:
         mc3, mc4 = st.columns(2)
         mc3.metric("Ix [m⁴]", f"{Ipx:.5f}"); mc4.metric("Iy [m⁴]", f"{Ipy:.5f}")
 
+        st.subheader("Pile Group Plan")
+        st.plotly_chart(
+            pile_group_plan_figure(
+                "Round" if pile_is_round else "Square",
+                D, B, H, s_D, nx, ny, use_group
+            ),
+            use_container_width=True
+        )
+
     with left_col:
         st.subheader("🪨 Soil Layer Input")
 
@@ -816,6 +986,9 @@ else:
             )
 
 depths  = np.arange(0, L + 1e-9, node_spacing)
+if len(depths) == 0 or abs(depths[-1] - L) > 1e-6:
+    depths = np.append(depths, L)
+tributary_lengths = calc_tributary_lengths(depths, L)
 results = []
 
 # df_soil_draw: version ที่กรองแถวไม่ครบออกแล้ว — ใช้สำหรับวาด UI ทุกที่
@@ -838,7 +1011,7 @@ else:
         df_soil_calc["Soil_Type"].astype(str).str.strip().isin(["Clay", "Sand"])
     ].reset_index(drop=True)
 
-    for z in depths:
+    for node_no, (z, trib_len) in enumerate(zip(depths, tributary_lengths)):
         mask  = (df_soil_calc["Depth_From"] <= z) & (df_soil_calc["Depth_To"] > z)
         layer = df_soil_calc[mask].iloc[0] if mask.any() else df_soil_calc.iloc[-1]
 
@@ -856,8 +1029,9 @@ else:
                 kh_x, E0 = calc_kh_jra(N_val, Deq_x, design_stage, soil_type, below_water)
                 kh_y, _  = calc_kh_jra(N_val, Deq_y, design_stage, soil_type, below_water)
             elif method == "Terzaghi":
-                kh_x = calc_kh_terzaghi(N_val, soil_type, Deq_x, z_mid, below_water)
-                kh_y = calc_kh_terzaghi(N_val, soil_type, Deq_y, z_mid, below_water)
+                cu_val = layer.get("cu", None) if soil_type == "Clay" else None
+                kh_x = calc_kh_terzaghi(N_val, soil_type, Deq_x, z_mid, below_water, cu_val)
+                kh_y = calc_kh_terzaghi(N_val, soil_type, Deq_y, z_mid, below_water, cu_val)
                 E0 = 2800 * N_val
             elif method == "Vesic 1961":
                 Es_kPa = float(layer.get("Es", 20000))
@@ -875,12 +1049,13 @@ else:
                 kh_y, _  = calc_kh_broms(soil_type, N_val, z, Deq_y, gamma_eff, phi, cu)
                 E0 = float(layer.get("Es", 20000))
 
-        Ksx = kh_x * Deq_x * node_spacing * Pmult
-        Ksy = kh_y * Deq_y * node_spacing * Pmult
+        Ksx = kh_x * Deq_x * trib_len * Pmult
+        Ksy = kh_y * Deq_y * trib_len * Pmult
 
         results.append({
-            "Node":         int(round(z / node_spacing)),
+            "Node":         node_no,
             "Depth [m]":    round(z, 3),
+            "Trib. L [m]":  round(trib_len, 3),
             "Soil_Type":    soil_type,
             "N-SPT":        N_val,
             "kh_x [kN/m³]": round(kh_x, 1),
@@ -891,7 +1066,9 @@ else:
         })
 
     df_results = pd.DataFrame(results)
-    N_tip          = float(df_soil_calc.iloc[-1]["SPT_N"])
+    tip_mask = (df_soil_calc["Depth_From"] <= L) & (df_soil_calc["Depth_To"] > L)
+    tip_layer = df_soil_calc[tip_mask].iloc[0] if tip_mask.any() else df_soil_calc.iloc[-1]
+    N_tip          = float(tip_layer["SPT_N"])
     Kv_tip, kv_tip = calc_kv_tip(N_tip, max(Deq_x, Deq_y), Ap, design_stage)
 
     # β — use Ipy for X-direction (bend about Y-axis)
