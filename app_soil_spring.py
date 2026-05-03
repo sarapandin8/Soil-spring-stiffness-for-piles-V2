@@ -1270,7 +1270,7 @@ with tab2:
                 "Ksy [kN/m]":   "{:,.1f}"
             }), use_container_width=True, height=580)
     with r_right:
-        st.subheader("Soil-Pile Profile with Springs")
+        st.subheader("Soil-Pile Profile with Springs (Global Average)")
         SOIL_COLORS = {"Clay": "#8B6354", "Sand": "#D4AA6A"}
         fig_p = go.Figure()
         x_pile = Deq_x / 2
@@ -1365,7 +1365,7 @@ with tab3:
         st.plotly_chart(fig_kh, use_container_width=True)
 
       with p2:
-        st.subheader("Spring Stiffness vs Depth")
+        st.subheader("Spring Stiffness vs Depth (Global Average)")
         fig_ks = go.Figure()
         fig_ks.add_trace(go.Scatter(x=df_results["Ksx [kN/m]"], y=df_results["Depth [m]"],
                                     mode='lines+markers', name='Ksx',
