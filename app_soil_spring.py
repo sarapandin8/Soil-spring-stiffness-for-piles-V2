@@ -15,7 +15,7 @@ VERSION = 9  # bumped: bug-fix Upload + UX improvements
 WIDGET_KEYS = [
     "stage", "method", "pile_type",
     "D", "B", "H", "L", "fc", "dl", "nu",
-    "wt", "scour", "use_group", "sD", "nx", "ny",
+    "wt", "scour", "use_group", "sD", "nx", "ny", "spring_output",
 ]  # คีย์ทุกตัวที่ผูกกับ Widget — ห้ามแก้ไขหลัง widget สร้างแล้ว
 
 # ─────────────────────────────────────────────
@@ -50,7 +50,7 @@ def _apply_pending_profile():
 # ─────────────────────────────────────────────
 def save_project_to_dict(
     design_stage, method, pile_type, D, B, H, L, fc, node_spacing, nu,
-    water_table, scour_depth, use_group, s_D, nx, ny,
+    water_table, scour_depth, use_group, s_D, nx, ny, spring_output,
     soil_layers, app_version
 ):
     """Create a dictionary with all project parameters for saving"""
@@ -72,6 +72,7 @@ def save_project_to_dict(
         "s_D": float(s_D),
         "nx": int(nx),
         "ny": int(ny),
+        "spring_output": spring_output,
         "soil_layers": soil_layers.to_dict(orient="records"),
         "saved_timestamp": pd.Timestamp.now().isoformat(),
     }
@@ -91,6 +92,7 @@ def load_project_from_dict(data):
         "use_group": "use_group",
         "s_D": "sD",
         "nx": "nx", "ny": "ny",
+        "spring_output": "spring_output",
     }
     for json_key, st_key in key_map.items():
         if json_key in data:
@@ -271,6 +273,10 @@ def calc_pmultiplier(s_D_ratio, row_pos):
     if s_D_ratio <= keys[0]:  return t[keys[0]]
     if s_D_ratio >= keys[-1]: return t[keys[-1]]
     return float(np.interp(s_D_ratio, keys, [t[k] for k in keys]))
+
+def group_row_position(row_index):
+    """Row label used for p-multiplier lookup."""
+    return "Lead Row" if row_index == 0 else ("2nd Row" if row_index == 1 else "3rd Row+")
 
 def calc_pile_props(pile_type, D, B, H, fc):
     """Concrete pile properties. Ep = 4700√fc (MPa) → kN/m²"""
@@ -770,12 +776,18 @@ if use_group:
     gc1, gc2 = st.sidebar.columns(2)
     nx = gc1.number_input("Piles in X", 1, 20, 3, 1, key="nx")
     ny = gc2.number_input("Piles in Y", 1, 20, 3, 1, key="ny")
+    spring_output = st.sidebar.radio(
+        "Spring Output",
+        ["Global average spring", "Row-based spring table"],
+        key="spring_output",
+        help="เลือกตารางผลลัพธ์แบบค่าเฉลี่ยทั้งกลุ่ม หรือแบบแยกตาม row สำหรับแต่ละทิศทาง"
+    )
     n_total = int(nx * ny)
 
     def fm_row_list(n_piles, s_over_D):
         fms = []
         for i in range(n_piles):
-            pos = "Lead Row" if i == 0 else ("2nd Row" if i == 1 else "3rd Row+")
+            pos = group_row_position(i)
             fms.append(calc_pmultiplier(s_over_D, pos))
         return fms
 
@@ -787,6 +799,8 @@ if use_group:
     if s_D >= 6.0:
         st.sidebar.success("s/D ≥ 6 → fm = 1.00 (no reduction)")
         Pmult = 1.0
+        fms_x = [1.0] * int(nx)
+        fms_y = [1.0] * int(ny)
     else:
         st.sidebar.info(
             f"**Average fm = {Pmult:.3f}**  (ใช้ค่าเดียวทุกต้น)\n\n"
@@ -806,6 +820,9 @@ else:
     s_D = float(st.session_state.get("sD", 3.0))
     nx  = int(st.session_state.get("nx", 3))
     ny  = int(st.session_state.get("ny", 3))
+    spring_output = "Global average spring"
+    fms_x = [1.0]
+    fms_y = [1.0]
     Pmult = 1.0
 
 pile_is_round = (pile_type == "Round")
@@ -1000,6 +1017,7 @@ df_soil_draw = df_soil_draw[
 
 if not _ready:
     df_results = pd.DataFrame()
+    df_row_results = pd.DataFrame()
     N_tip = 0.0; Kv_tip = 0.0; kv_tip = 0.0
     beta  = 0.0; kh_avg = 0.0
     kh_max_surface = kh_min_deep = as_ratio_rec = As_min = 0.0
@@ -1011,6 +1029,7 @@ else:
         df_soil_calc["Soil_Type"].astype(str).str.strip().isin(["Clay", "Sand"])
     ].reset_index(drop=True)
 
+    row_results = []
     for node_no, (z, trib_len) in enumerate(zip(depths, tributary_lengths)):
         mask  = (df_soil_calc["Depth_From"] <= z) & (df_soil_calc["Depth_To"] > z)
         layer = df_soil_calc[mask].iloc[0] if mask.any() else df_soil_calc.iloc[-1]
@@ -1065,7 +1084,48 @@ else:
             "pu [kN/m]":    round(pu, 1) if not np.isnan(pu) else np.nan,
         })
 
+        if use_group and spring_output == "Row-based spring table":
+            for row_idx, fm in enumerate(fms_x):
+                row_results.append({
+                    "Node":         node_no,
+                    "Depth [m]":    round(z, 3),
+                    "Trib. L [m]":  round(trib_len, 3),
+                    "Direction":    "X",
+                    "Row No.":      row_idx + 1,
+                    "Row Position": group_row_position(row_idx),
+                    "fm":           round(float(fm), 3),
+                    "Soil_Type":    soil_type,
+                    "N-SPT":        N_val,
+                    "kh [kN/m³]":   round(kh_x, 1),
+                    "kh [kN/m3]":   round(kh_x, 1),
+                    "Deq [m]":      round(Deq_x, 3),
+                    "Kspring [kN/m]": round(kh_x * Deq_x * trib_len * float(fm), 1),
+                })
+            for row_idx, fm in enumerate(fms_y):
+                row_results.append({
+                    "Node":         node_no,
+                    "Depth [m]":    round(z, 3),
+                    "Trib. L [m]":  round(trib_len, 3),
+                    "Direction":    "Y",
+                    "Row No.":      row_idx + 1,
+                    "Row Position": group_row_position(row_idx),
+                    "fm":           round(float(fm), 3),
+                    "Soil_Type":    soil_type,
+                    "N-SPT":        N_val,
+                    "kh [kN/m³]":   round(kh_y, 1),
+                    "kh [kN/m3]":   round(kh_y, 1),
+                    "Deq [m]":      round(Deq_y, 3),
+                    "Kspring [kN/m]": round(kh_y * Deq_y * trib_len * float(fm), 1),
+                })
+
     df_results = pd.DataFrame(results)
+    df_row_results = pd.DataFrame(row_results)
+    if not df_row_results.empty:
+        df_row_results = df_row_results[[
+            "Node", "Depth [m]", "Trib. L [m]", "Direction", "Row No.",
+            "Row Position", "fm", "Soil_Type", "N-SPT", "kh [kN/m3]",
+            "Deq [m]", "Kspring [kN/m]"
+        ]]
     tip_mask = (df_soil_calc["Depth_From"] <= L) & (df_soil_calc["Depth_To"] > L)
     tip_layer = df_soil_calc[tip_mask].iloc[0] if tip_mask.any() else df_soil_calc.iloc[-1]
     N_tip          = float(tip_layer["SPT_N"])
@@ -1105,7 +1165,7 @@ st.sidebar.header("6. Save / Load Project")
 
 project_data = save_project_to_dict(
     design_stage, method, pile_type, D, B, H, L, fc, node_spacing, nu,
-    water_table, scour_depth, use_group, s_D, nx, ny,
+    water_table, scour_depth, use_group, s_D, nx, ny, spring_output,
     st.session_state.get("_soil_edited", st.session_state.soil_layers), VERSION
 )
 json_str = json.dumps(project_data, indent=2, ensure_ascii=False)
@@ -1165,7 +1225,21 @@ with tab2:
         if not _ready or df_results.empty:
             st.info("⏳ กรุณากรอกข้อมูลชั้นดินให้ครบก่อน ระบบจะแสดงผลลัพธ์ที่นี่", icon="🪨")
         else:
-            st.dataframe(df_results.style.format({
+            if use_group and spring_output == "Row-based spring table" and not df_row_results.empty:
+                st.caption("Row-based output: one spring stiffness per depth, direction, and pile row.")
+                st.dataframe(df_row_results.style.format({
+                    "Depth [m]":      "{:.2f}",
+                    "Trib. L [m]":    "{:.3f}",
+                    "fm":             "{:.3f}",
+                    "N-SPT":          "{:.0f}",
+                    "kh [kN/mยณ]":    "{:,.0f}",
+                    "kh [kN/m3]":     "{:,.0f}",
+                    "Deq [m]":        "{:.3f}",
+                    "Kspring [kN/m]": "{:,.1f}",
+                }), use_container_width=True, height=580)
+            else:
+                st.caption("Global average output: Ksx and Ksy use the average p-multiplier shown in the sidebar.")
+                st.dataframe(df_results.style.format({
                 "Depth [m]":    "{:.2f}",
                 "kh_x [kN/m³]": "{:,.0f}",
                 "kh_y [kN/m³]": "{:,.0f}",
