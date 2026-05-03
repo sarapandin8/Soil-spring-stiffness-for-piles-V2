@@ -138,7 +138,7 @@ SOIL_DB = {
 }
 
 SOIL_PROFILES = {
-    "กรุงเทพฯ - โปรไฟล์ทั่วไป (General)": pd.DataFrame([
+    "Bangkok - General Profile": pd.DataFrame([
         {"Depth_From": 0.0,  "Depth_To": 2.0,  "Soil_Type": "Clay", "Consistency": "Soft",         "SPT_N": 3,  "Es":  3000, "cu": 15,  "phi": 0, "Gamma": 16.0},
         {"Depth_From": 2.0,  "Depth_To": 8.0,  "Soil_Type": "Clay", "Consistency": "Very Soft",    "SPT_N": 2,  "Es":  1500, "cu": 10,  "phi": 0, "Gamma": 15.0},
         {"Depth_From": 8.0,  "Depth_To": 12.0, "Soil_Type": "Clay", "Consistency": "Soft",         "SPT_N": 5,  "Es":  6000, "cu": 30,  "phi": 0, "Gamma": 16.0},
@@ -149,25 +149,60 @@ SOIL_PROFILES = {
         {"Depth_From": 28.0, "Depth_To": 32.0, "Soil_Type": "Clay", "Consistency": "Stiff",        "SPT_N": 18, "Es": 30000, "cu": 110, "phi": 0, "Gamma": 18.5},
         {"Depth_From": 32.0, "Depth_To": 40.0, "Soil_Type": "Sand", "Consistency": "Very Dense",   "SPT_N": 45, "Es":120000, "cu": 0,   "phi": 38, "Gamma": 20.5},
     ]),
-    "กรุงเทพฯ - สุขุมวิท/รัชดา (ซอฟต์เคลย์หนา)": pd.DataFrame([
+    "Bangkok - Sukhumvit/Ratchada (Thick Soft Clay)": pd.DataFrame([
         {"Depth_From": 0.0,  "Depth_To": 3.0,  "Soil_Type": "Clay", "Consistency": "Soft",         "SPT_N": 2,  "Es":  2000, "cu": 12,  "phi": 0, "Gamma": 15.5},
         {"Depth_From": 3.0,  "Depth_To": 12.0, "Soil_Type": "Clay", "Consistency": "Very Soft",    "SPT_N": 1,  "Es":  1200, "cu": 8,   "phi": 0, "Gamma": 14.5},
         {"Depth_From": 12.0, "Depth_To": 18.0, "Soil_Type": "Clay", "Consistency": "Medium Stiff", "SPT_N": 8,  "Es": 10000, "cu": 45,  "phi": 0, "Gamma": 16.5},
         {"Depth_From": 18.0, "Depth_To": 24.0, "Soil_Type": "Sand", "Consistency": "Medium Dense", "SPT_N": 25, "Es": 55000, "cu": 0,   "phi": 33, "Gamma": 19.0},
         {"Depth_From": 24.0, "Depth_To": 30.0, "Soil_Type": "Sand", "Consistency": "Dense",        "SPT_N": 40, "Es": 90000, "cu": 0,   "phi": 36, "Gamma": 20.0},
     ]),
-    "กรุงเทพฯ - ธนบุรี/ปิ่นเกล้า (ดินเหนียวแข็งตื้น)": pd.DataFrame([
+    "Bangkok - Thonburi/Pinklao (Shallow Stiff Clay)": pd.DataFrame([
         {"Depth_From": 0.0,  "Depth_To": 4.0,  "Soil_Type": "Clay", "Consistency": "Medium Stiff", "SPT_N": 8,  "Es": 12000, "cu": 50,  "phi": 0, "Gamma": 17.5},
         {"Depth_From": 4.0,  "Depth_To": 10.0, "Soil_Type": "Clay", "Consistency": "Stiff",        "SPT_N": 14, "Es": 22000, "cu": 85,  "phi": 0, "Gamma": 18.5},
         {"Depth_From": 10.0, "Depth_To": 15.0, "Soil_Type": "Clay", "Consistency": "Very Stiff",   "SPT_N": 22, "Es": 35000, "cu": 130, "phi": 0, "Gamma": 19.0},
         {"Depth_From": 15.0, "Depth_To": 20.0, "Soil_Type": "Sand", "Consistency": "Dense",        "SPT_N": 35, "Es": 80000, "cu": 0,   "phi": 36, "Gamma": 20.0},
     ]),
-    "ดินทั่วไปประเทศไทย - Default (5 ชั้น)": pd.DataFrame([
-        {"Depth_From":  0.0, "Depth_To":  5.0, "Soil_Type": "Clay", "Consistency": "Soft",         "SPT_N":  4, "Es":  5000, "cu":  25, "phi": 0,  "Gamma": 17.0},
-        {"Depth_From":  5.0, "Depth_To": 10.0, "Soil_Type": "Clay", "Consistency": "Medium Stiff", "SPT_N":  9, "Es": 12000, "cu":  55, "phi": 0,  "Gamma": 17.5},
-        {"Depth_From": 10.0, "Depth_To": 15.0, "Soil_Type": "Clay", "Consistency": "Stiff",        "SPT_N": 16, "Es": 26000, "cu":  96, "phi": 0,  "Gamma": 18.0},
-        {"Depth_From": 15.0, "Depth_To": 20.0, "Soil_Type": "Sand", "Consistency": "Medium Dense", "SPT_N": 22, "Es": 45000, "cu":   0, "phi": 32, "Gamma": 18.5},
-        {"Depth_From": 20.0, "Depth_To": 25.0, "Soil_Type": "Sand", "Consistency": "Dense",        "SPT_N": 38, "Es": 80000, "cu":   0, "phi": 35, "Gamma": 19.0},
+    "Thailand Central Plain - Alluvial Clay/Sand (Preliminary Only)": pd.DataFrame([
+        {"Depth_From":  0.0, "Depth_To":  2.0, "Soil_Type": "Clay", "Consistency": "Soft",         "SPT_N":  4, "Es":  5000, "cu":  25, "phi": 0,  "Gamma": 17.0},
+        {"Depth_From":  2.0, "Depth_To":  8.0, "Soil_Type": "Clay", "Consistency": "Very Soft",    "SPT_N":  2, "Es":  1500, "cu":  10, "phi": 0,  "Gamma": 15.5},
+        {"Depth_From":  8.0, "Depth_To": 15.0, "Soil_Type": "Clay", "Consistency": "Soft",         "SPT_N":  5, "Es":  6000, "cu":  30, "phi": 0,  "Gamma": 16.5},
+        {"Depth_From": 15.0, "Depth_To": 22.0, "Soil_Type": "Sand", "Consistency": "Medium Dense", "SPT_N": 20, "Es": 45000, "cu":   0, "phi": 32, "Gamma": 18.5},
+        {"Depth_From": 22.0, "Depth_To": 30.0, "Soil_Type": "Clay", "Consistency": "Stiff",        "SPT_N": 16, "Es": 26000, "cu":  96, "phi": 0,  "Gamma": 18.5},
+    ]),
+    "Thailand East - Residual/Lateritic Soil (Preliminary Only)": pd.DataFrame([
+        {"Depth_From":  0.0, "Depth_To":  2.0, "Soil_Type": "Clay", "Consistency": "Medium Stiff", "SPT_N":  8, "Es": 12000, "cu":  50, "phi": 0,  "Gamma": 18.0},
+        {"Depth_From":  2.0, "Depth_To":  6.0, "Soil_Type": "Clay", "Consistency": "Stiff",        "SPT_N": 15, "Es": 25000, "cu":  90, "phi": 0,  "Gamma": 18.5},
+        {"Depth_From":  6.0, "Depth_To": 12.0, "Soil_Type": "Sand", "Consistency": "Medium Dense", "SPT_N": 25, "Es": 55000, "cu":   0, "phi": 33, "Gamma": 19.0},
+        {"Depth_From": 12.0, "Depth_To": 20.0, "Soil_Type": "Clay", "Consistency": "Very Stiff",   "SPT_N": 25, "Es": 40000, "cu": 150, "phi": 0,  "Gamma": 19.0},
+        {"Depth_From": 20.0, "Depth_To": 30.0, "Soil_Type": "Sand", "Consistency": "Dense",        "SPT_N": 40, "Es": 80000, "cu":   0, "phi": 36, "Gamma": 20.0},
+    ]),
+    "Thailand Northeast - Lateritic/Residual Soil (Preliminary Only)": pd.DataFrame([
+        {"Depth_From":  0.0, "Depth_To":  2.0, "Soil_Type": "Clay", "Consistency": "Stiff",        "SPT_N": 12, "Es": 18000, "cu":  72, "phi": 0,  "Gamma": 18.5},
+        {"Depth_From":  2.0, "Depth_To":  6.0, "Soil_Type": "Sand", "Consistency": "Medium Dense", "SPT_N": 18, "Es": 40000, "cu":   0, "phi": 32, "Gamma": 18.5},
+        {"Depth_From":  6.0, "Depth_To": 12.0, "Soil_Type": "Clay", "Consistency": "Very Stiff",   "SPT_N": 25, "Es": 40000, "cu": 150, "phi": 0,  "Gamma": 19.0},
+        {"Depth_From": 12.0, "Depth_To": 20.0, "Soil_Type": "Sand", "Consistency": "Dense",        "SPT_N": 35, "Es": 75000, "cu":   0, "phi": 35, "Gamma": 19.5},
+        {"Depth_From": 20.0, "Depth_To": 30.0, "Soil_Type": "Clay", "Consistency": "Hard",         "SPT_N": 40, "Es": 75000, "cu": 250, "phi": 0,  "Gamma": 20.0},
+    ]),
+    "Thailand North - Residual/Colluvial Soil (Preliminary Only)": pd.DataFrame([
+        {"Depth_From":  0.0, "Depth_To":  2.0, "Soil_Type": "Sand", "Consistency": "Loose",        "SPT_N":  8, "Es": 20000, "cu":   0, "phi": 30, "Gamma": 17.5},
+        {"Depth_From":  2.0, "Depth_To":  6.0, "Soil_Type": "Clay", "Consistency": "Medium Stiff", "SPT_N": 10, "Es": 15000, "cu":  60, "phi": 0,  "Gamma": 18.0},
+        {"Depth_From":  6.0, "Depth_To": 12.0, "Soil_Type": "Sand", "Consistency": "Medium Dense", "SPT_N": 25, "Es": 55000, "cu":   0, "phi": 34, "Gamma": 19.0},
+        {"Depth_From": 12.0, "Depth_To": 20.0, "Soil_Type": "Sand", "Consistency": "Dense",        "SPT_N": 40, "Es": 80000, "cu":   0, "phi": 37, "Gamma": 20.0},
+        {"Depth_From": 20.0, "Depth_To": 30.0, "Soil_Type": "Clay", "Consistency": "Very Stiff",   "SPT_N": 30, "Es": 50000, "cu": 180, "phi": 0,  "Gamma": 19.5},
+    ]),
+    "Thailand South Gulf - Marine Clay/Sand (Preliminary Only)": pd.DataFrame([
+        {"Depth_From":  0.0, "Depth_To":  2.0, "Soil_Type": "Sand", "Consistency": "Loose",        "SPT_N":  6, "Es": 18000, "cu":   0, "phi": 29, "Gamma": 17.0},
+        {"Depth_From":  2.0, "Depth_To":  8.0, "Soil_Type": "Clay", "Consistency": "Soft",         "SPT_N":  3, "Es":  3000, "cu":  18, "phi": 0,  "Gamma": 16.0},
+        {"Depth_From":  8.0, "Depth_To": 15.0, "Soil_Type": "Clay", "Consistency": "Medium Stiff", "SPT_N":  8, "Es": 10000, "cu":  45, "phi": 0,  "Gamma": 17.0},
+        {"Depth_From": 15.0, "Depth_To": 22.0, "Soil_Type": "Sand", "Consistency": "Medium Dense", "SPT_N": 22, "Es": 45000, "cu":   0, "phi": 32, "Gamma": 19.0},
+        {"Depth_From": 22.0, "Depth_To": 30.0, "Soil_Type": "Sand", "Consistency": "Dense",        "SPT_N": 35, "Es": 80000, "cu":   0, "phi": 35, "Gamma": 20.0},
+    ]),
+    "Thailand South Andaman - Sand/Residual Soil (Preliminary Only)": pd.DataFrame([
+        {"Depth_From":  0.0, "Depth_To":  3.0, "Soil_Type": "Sand", "Consistency": "Loose",        "SPT_N":  8, "Es": 20000, "cu":   0, "phi": 30, "Gamma": 17.5},
+        {"Depth_From":  3.0, "Depth_To":  8.0, "Soil_Type": "Sand", "Consistency": "Medium Dense", "SPT_N": 18, "Es": 40000, "cu":   0, "phi": 32, "Gamma": 18.5},
+        {"Depth_From":  8.0, "Depth_To": 14.0, "Soil_Type": "Clay", "Consistency": "Stiff",        "SPT_N": 15, "Es": 25000, "cu":  90, "phi": 0,  "Gamma": 18.5},
+        {"Depth_From": 14.0, "Depth_To": 22.0, "Soil_Type": "Sand", "Consistency": "Dense",        "SPT_N": 35, "Es": 80000, "cu":   0, "phi": 36, "Gamma": 20.0},
+        {"Depth_From": 22.0, "Depth_To": 30.0, "Soil_Type": "Clay", "Consistency": "Very Stiff",   "SPT_N": 28, "Es": 45000, "cu": 170, "phi": 0,  "Gamma": 19.5},
     ])
 }
 
@@ -190,7 +225,7 @@ _apply_pending_profile()
 
 # ต้อง init soil_layers หลัง pending handlers (เพราะ Reset อาจลบ key นี้ไป)
 if 'soil_layers' not in st.session_state:
-    st.session_state.soil_layers = SOIL_PROFILES["กรุงเทพฯ - โปรไฟล์ทั่วไป (General)"].copy()
+    st.session_state.soil_layers = SOIL_PROFILES["Bangkok - General Profile"].copy()
 
 # _prev_type_cons: เก็บ (Soil_Type, Consistency) ของแต่ละแถวจาก rerun ที่แล้ว
 # ใช้ตรวจจับว่าผู้ใช้เปลี่ยนชนิดดิน → trigger auto-fill
