@@ -607,9 +607,9 @@ def calculate_rebar_params(df_results, Ap):
     As_min = Ap * as_ratio_rec
     return kh_max_surface, kh_min_deep, as_ratio_rec, As_min
 
-def build_excel(df_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
+def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
                 node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta,
-                kh_max_surface, kh_min_deep, as_ratio_rec, As_min):
+                kh_max_surface, kh_min_deep, as_ratio_rec, As_min, use_group, spring_output):
     """Build Excel file with all calculation results"""
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
@@ -634,6 +634,27 @@ def build_excel(df_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, f
                 else:
                     ws1.write(4+ri, ci, val if not (isinstance(val, float) and np.isnan(val)) else '', fmt_num)
         ws1.set_column(0, len(headers)-1, 15)
+
+        # Sheet 1B: row-based springs
+        ws1b = wb.add_worksheet("Lateral Springs Row")
+        ws1b.write(0, 0, f"Lateral Soil Spring Stiffness - Row-based - Method: {method}", fmt_title)
+        ws1b.write(1, 0, "One row per depth, loading direction, and pile row. Kspring = kh x Deq x tributary length x fm(row).", fmt_info)
+        if use_group and df_row_results is not None and not df_row_results.empty:
+            row_headers = list(df_row_results.columns)
+            for ci, h in enumerate(row_headers):
+                ws1b.write(3, ci, h, fmt_header)
+            for ri, row in df_row_results.iterrows():
+                for ci, val in enumerate(row):
+                    if isinstance(val, float) and not np.isnan(val):
+                        ws1b.write(4+ri, ci, val, fmt_num)
+                    else:
+                        ws1b.write(4+ri, ci, val if not (isinstance(val, float) and np.isnan(val)) else '', fmt_num)
+            ws1b.set_column(0, len(row_headers)-1, 15)
+            ws1b.set_column(5, 5, 16)
+            ws1b.set_column(11, 11, 18)
+        else:
+            ws1b.write(3, 0, "Row-based table is available when Apply Group Effect is enabled.", fmt_info)
+            ws1b.set_column(0, 0, 70)
 
         # Sheet 2
         ws2 = wb.add_worksheet("Vertical Tip Spring")
@@ -669,6 +690,8 @@ def build_excel(df_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, f
             ("Water Table [m]", water_table, "m"),
             ("Scour Depth [m]", scour_depth, "m"),
             ("p-multiplier", Pmult, "-"),
+            ("Spring Output", spring_output, "-"),
+            ("Excel Export", "Global average + row-based sheets", "-"),
             ("β (Characteristic Length) [1/m]", round(beta, 4), "1/m"),
             ("Kv_tip [kN/m]", round(Kv_tip, 1), "kN/m"),
         ]
@@ -1084,7 +1107,7 @@ else:
             "pu [kN/m]":    round(pu, 1) if not np.isnan(pu) else np.nan,
         })
 
-        if use_group and spring_output == "Row-based spring table":
+        if use_group:
             for row_idx, fm in enumerate(fms_x):
                 row_results.append({
                     "Node":         node_no,
@@ -1145,9 +1168,9 @@ else:
 st.sidebar.header("5. Export")
 if _ready:
     excel_data = build_excel(
-        df_results, df_soil_draw, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
+        df_results, df_row_results, df_soil_draw, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
         node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta,
-        kh_max_surface, kh_min_deep, as_ratio_rec, As_min
+        kh_max_surface, kh_min_deep, as_ratio_rec, As_min, use_group, spring_output
     )
     st.sidebar.download_button(
         "📥 Download Excel (.xlsx)",
