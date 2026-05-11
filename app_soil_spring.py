@@ -1,32 +1,32 @@
-import streamlit as st
+﻿import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from io import BytesIO
 import json
 
-st.set_page_config(page_title="Pile Soil Spring Calculator", layout="wide", page_icon="🏗️")
+st.set_page_config(page_title="Pile Soil Spring Calculator", layout="wide", page_icon="๐—๏ธ")
 
 VERSION = 9  # bumped: bug-fix Upload + UX improvements
 
-# ─────────────────────────────────────────────
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 #  CONSTANTS
-# ─────────────────────────────────────────────
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 WIDGET_KEYS = [
     "stage", "method", "pile_type",
     "D", "B", "H", "L", "fc", "dl", "nu",
     "wt", "scour", "use_group", "sD", "nx", "ny", "spring_output",
-]  # คีย์ทุกตัวที่ผูกกับ Widget — ห้ามแก้ไขหลัง widget สร้างแล้ว
+]  # เธเธตเธขเนเธ—เธธเธเธ•เธฑเธงเธ—เธตเนเธเธนเธเธเธฑเธ Widget โ€” เธซเนเธฒเธกเนเธเนเนเธเธซเธฅเธฑเธ widget เธชเธฃเนเธฒเธเนเธฅเนเธง
 
-# ─────────────────────────────────────────────
-#  PENDING-LOAD HANDLER  (ต้องอยู่ก่อนสร้าง widget!)
-# ─────────────────────────────────────────────
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
+#  PENDING-LOAD HANDLER  (เธ•เนเธญเธเธญเธขเธนเนเธเนเธญเธเธชเธฃเนเธฒเธ widget!)
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 def _apply_pending_load():
-    """Apply ค่าที่ load จากไฟล์ JSON ก่อนที่ widget จะถูกสร้าง
-    เพื่อหลีกเลี่ยง 'st.session_state.<key> cannot be modified after the widget is instantiated'."""
+    """Apply เธเนเธฒเธ—เธตเน load เธเธฒเธเนเธเธฅเน JSON เธเนเธญเธเธ—เธตเน widget เธเธฐเธ–เธนเธเธชเธฃเนเธฒเธ
+    เน€เธเธทเนเธญเธซเธฅเธตเธเน€เธฅเธตเนเธขเธ 'st.session_state.<key> cannot be modified after the widget is instantiated'."""
     if "_pending_load" in st.session_state:
         pending = st.session_state.pop("_pending_load")
-        # ล้าง widget-state ของ data_editor เพื่อบังคับให้ render DataFrame ใหม่
+        # เธฅเนเธฒเธ widget-state เธเธญเธ data_editor เน€เธเธทเนเธญเธเธฑเธเธเธฑเธเนเธซเน render DataFrame เนเธซเธกเน
         for w in ("soil_editor", "_soil_edited", "_prev_type_cons"):
             if w in st.session_state:
                 del st.session_state[w]
@@ -35,7 +35,7 @@ def _apply_pending_load():
         st.session_state["_just_loaded_msg"] = pending.get("__msg__", "")
 
 def _apply_pending_profile():
-    """ใช้ Predefined soil profile (เรียกก่อนสร้าง widget)"""
+    """เนเธเน Predefined soil profile (เน€เธฃเธตเธขเธเธเนเธญเธเธชเธฃเนเธฒเธ widget)"""
     if "_pending_profile" in st.session_state:
         name = st.session_state.pop("_pending_profile")
         if name in SOIL_PROFILES:
@@ -43,11 +43,11 @@ def _apply_pending_profile():
             for w in ("soil_editor", "_soil_edited", "_prev_type_cons"):
                 if w in st.session_state:
                     del st.session_state[w]
-            st.session_state["_just_profile_msg"] = f"✅ ใช้โปรไฟล์: {name}"
+            st.session_state["_just_profile_msg"] = f"โ… เนเธเนเนเธเธฃเนเธเธฅเน: {name}"
 
-# ─────────────────────────────────────────────
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 #  SAVE / LOAD PROJECT FUNCTIONS
-# ─────────────────────────────────────────────
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 def save_project_to_dict(
     design_stage, method, pile_type, D, B, H, L, fc, node_spacing, nu,
     water_table, scour_depth, use_group, s_D, nx, ny, spring_output,
@@ -97,7 +97,7 @@ def load_project_from_dict(data):
     for json_key, st_key in key_map.items():
         if json_key in data:
             v = data[json_key]
-            # Coerce types สำหรับ number_input (ต้องการ float/int ตรงกับ default)
+            # Coerce types เธชเธณเธซเธฃเธฑเธ number_input (เธ•เนเธญเธเธเธฒเธฃ float/int เธ•เธฃเธเธเธฑเธ default)
             if st_key in ("nx", "ny"):
                 v = int(v)
             elif st_key in ("D", "B", "H", "L", "fc", "dl", "nu", "wt", "scour", "sD"):
@@ -116,23 +116,23 @@ def load_project_from_dict(data):
 
     return updates
 
-# ─────────────────────────────────────────────
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 #  REFERENCE DATABASE
-# ─────────────────────────────────────────────
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 SOIL_DB = {
     "Clay": {
         "Very Soft":       {"N": 1,  "cu": 6,   "Es":  1500, "Gamma": 15, "alpha": 12,  "desc": "N<2,  cu<12 kPa, Bangkok Soft Clay"},
-        "Soft":            {"N": 3,  "cu": 18,  "Es":  3000, "Gamma": 16, "alpha": 24,  "desc": "N=2–4, cu=12–25 kPa"},
-        "Medium Stiff":    {"N": 6,  "cu": 36,  "Es":  8000, "Gamma": 17, "alpha": 48,  "desc": "N=5–8, cu=25–50 kPa"},
-        "Stiff":           {"N": 12, "cu": 72,  "Es": 18000, "Gamma": 18, "alpha": 96,  "desc": "N=9–15, cu=50–100 kPa"},
-        "Very Stiff":      {"N": 25, "cu": 150, "Es": 40000, "Gamma": 19, "alpha": 150, "desc": "N=16–30, cu=100–200 kPa"},
+        "Soft":            {"N": 3,  "cu": 18,  "Es":  3000, "Gamma": 16, "alpha": 24,  "desc": "N=2โ€“4, cu=12โ€“25 kPa"},
+        "Medium Stiff":    {"N": 6,  "cu": 36,  "Es":  8000, "Gamma": 17, "alpha": 48,  "desc": "N=5โ€“8, cu=25โ€“50 kPa"},
+        "Stiff":           {"N": 12, "cu": 72,  "Es": 18000, "Gamma": 18, "alpha": 96,  "desc": "N=9โ€“15, cu=50โ€“100 kPa"},
+        "Very Stiff":      {"N": 25, "cu": 150, "Es": 40000, "Gamma": 19, "alpha": 150, "desc": "N=16โ€“30, cu=100โ€“200 kPa"},
         "Hard":            {"N": 40, "cu": 250, "Es": 75000, "Gamma": 20, "alpha": 200, "desc": "N>30, cu>200 kPa"},
     },
     "Sand": {
         "Very Loose":   {"N": 2,  "phi": 26, "Es":  8000, "Gamma": 15, "nh_dry": 2200,  "nh_wet": 1300,  "desc": "N<4,   very loose, Dr<20%"},
-        "Loose":        {"N": 7,  "phi": 30, "Es": 20000, "Gamma": 17, "nh_dry": 6600,  "nh_wet": 4000,  "desc": "N=4–10, loose, Dr=20–40%"},
-        "Medium Dense": {"N": 20, "phi": 33, "Es": 45000, "Gamma": 18, "nh_dry": 17600, "nh_wet": 10500, "desc": "N=11–30, medium, Dr=40–60%"},
-        "Dense":        {"N": 40, "phi": 37, "Es": 80000, "Gamma": 19, "nh_dry": 35000, "nh_wet": 21000, "desc": "N=31–50, dense, Dr=60–80%"},
+        "Loose":        {"N": 7,  "phi": 30, "Es": 20000, "Gamma": 17, "nh_dry": 6600,  "nh_wet": 4000,  "desc": "N=4โ€“10, loose, Dr=20โ€“40%"},
+        "Medium Dense": {"N": 20, "phi": 33, "Es": 45000, "Gamma": 18, "nh_dry": 17600, "nh_wet": 10500, "desc": "N=11โ€“30, medium, Dr=40โ€“60%"},
+        "Dense":        {"N": 40, "phi": 37, "Es": 80000, "Gamma": 19, "nh_dry": 35000, "nh_wet": 21000, "desc": "N=31โ€“50, dense, Dr=60โ€“80%"},
         "Very Dense":   {"N": 55, "phi": 41, "Es":120000, "Gamma": 20, "nh_dry": 56000, "nh_wet": 34000, "desc": "N>50,  very dense, Dr>80%"},
     }
 }
@@ -221,23 +221,23 @@ REBAR_DB = {
     "DB32": {"dia_mm": 32, "fy_mpa": 490},
 }
 
-# ─────────────────────────────────────────────
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 #  SESSION STATE INIT  (must run BEFORE handlers below)
-# ─────────────────────────────────────────────
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 if 'version' not in st.session_state or st.session_state.version < VERSION:
     st.session_state.clear()
     st.session_state.version = VERSION
 
-# ★ CRITICAL: ต้อง apply pending changes ก่อน widget ถูกสร้างทั้งหมด
+# โ… CRITICAL: เธ•เนเธญเธ apply pending changes เธเนเธญเธ widget เธ–เธนเธเธชเธฃเนเธฒเธเธ—เธฑเนเธเธซเธกเธ”
 _apply_pending_load()
 _apply_pending_profile()
 
-# ต้อง init soil_layers หลัง pending handlers (เพราะ Reset อาจลบ key นี้ไป)
+# เธ•เนเธญเธ init soil_layers เธซเธฅเธฑเธ pending handlers (เน€เธเธฃเธฒเธฐ Reset เธญเธฒเธเธฅเธ key เธเธตเนเนเธ)
 if 'soil_layers' not in st.session_state:
     st.session_state.soil_layers = SOIL_PROFILES["Bangkok - General Profile"].copy()
 
-# _prev_type_cons: เก็บ (Soil_Type, Consistency) ของแต่ละแถวจาก rerun ที่แล้ว
-# ใช้ตรวจจับว่าผู้ใช้เปลี่ยนชนิดดิน → trigger auto-fill
+# _prev_type_cons: เน€เธเนเธ (Soil_Type, Consistency) เธเธญเธเนเธ•เนเธฅเธฐเนเธ–เธงเธเธฒเธ rerun เธ—เธตเนเนเธฅเนเธง
+# เนเธเนเธ•เธฃเธงเธเธเธฑเธเธงเนเธฒเธเธนเนเนเธเนเน€เธเธฅเธตเนเธขเธเธเธเธดเธ”เธ”เธดเธ โ’ trigger auto-fill
 if "_prev_type_cons" not in st.session_state:
     _init = st.session_state.soil_layers
     st.session_state["_prev_type_cons"] = {
@@ -245,9 +245,9 @@ if "_prev_type_cons" not in st.session_state:
         for i, r in _init.iterrows()
     }
 
-# ─────────────────────────────────────────────
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 #  ENGINEERING FUNCTIONS
-# ─────────────────────────────────────────────
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 def get_alpha_clay(N):
     """Bowles 1997 alpha factor for clay based on N-SPT"""
     if N <= 1:    return 12
@@ -258,7 +258,7 @@ def get_alpha_clay(N):
     else:         return 200
 
 def calc_kh_jra(N, D, design_stage, soil_type, below_water):
-    """JRA: kh = (E0/B0)·(D/B0)^(-3/4); E0=2800N (Normal) | 5600N (Seismic); Sand below WT × 0.6"""
+    """JRA: kh = (E0/B0)ยท(D/B0)^(-3/4); E0=2800N (Normal) | 5600N (Seismic); Sand below WT ร— 0.6"""
     B0 = 0.3
     E0_factor = 5600 if design_stage == "Seismic" else 2800
     E0 = E0_factor * N
@@ -268,13 +268,13 @@ def calc_kh_jra(N, D, design_stage, soil_type, below_water):
     return kh, E0
 
 def get_nh_terzaghi(N, below_water):
-    """Terzaghi (1955) nh values for sand [kN/m³/m] (Bowles 1997 Table 9-1)"""
+    """Terzaghi (1955) nh values for sand [kN/mยณ/m] (Bowles 1997 Table 9-1)"""
     if N < 10:   return 4000  if below_water else 7000
     elif N < 30: return 12000 if below_water else 21000
     else:        return 34000 if below_water else 56000
 
 def calc_kh_terzaghi(N, soil_type, D, z_mid, below_water, cu=None):
-    """Terzaghi (1955) / Bowles (1997): Sand kh=nh·z/D  |  Clay kh=α·cu/D"""
+    """Terzaghi (1955) / Bowles (1997): Sand kh=nhยทz/D  |  Clay kh=ฮฑยทcu/D"""
     if soil_type == "Sand":
         nh = get_nh_terzaghi(N, below_water)
         z_use = max(z_mid, 0.1)
@@ -296,7 +296,7 @@ def calc_kh_vesic(Es_kPa, D, Ep, Ip, nu=0.35):
     return 0.65 * (Es * D**4 / (Ep * Ip))**(1/12) * Es / (D * (1 - nu**2))
 
 def calc_kh_broms(soil_type, N, z, D, gamma_eff=8, phi=None, cu=None):
-    """Broms (1964) ultimate lateral resistance → secant kh at y=0.01D"""
+    """Broms (1964) ultimate lateral resistance โ’ secant kh at y=0.01D"""
     y_ref = 0.01 * D
     z_use = max(z, 0.1)
     if soil_type == "Sand":
@@ -323,7 +323,7 @@ def group_row_position(row_index):
     return "Lead Row" if row_index == 0 else ("2nd Row" if row_index == 1 else "3rd Row+")
 
 def get_rebar_area_mm2(bar_name):
-    """Nominal reinforcing bar area in mm²."""
+    """Nominal reinforcing bar area in mmยฒ."""
     dia_mm = float(REBAR_DB[bar_name]["dia_mm"])
     return np.pi * dia_mm**2 / 4.0
 
@@ -332,7 +332,7 @@ def get_rebar_fy_mpa(bar_name):
     return float(REBAR_DB[bar_name]["fy_mpa"])
 
 def calc_pile_props(pile_type, D, B, H, fc):
-    """Concrete pile properties. Ep = 4700√fc (MPa) → kN/m²"""
+    """Concrete pile properties. Ep = 4700โfc (MPa) โ’ kN/mยฒ"""
     Ep = 4700 * np.sqrt(fc) * 1000
     if pile_type == "Round":
         Ap = np.pi * D**2 / 4
@@ -398,7 +398,7 @@ def solve_pile_lateral_response(depths, spring_k, EI, head_shear=0.0, head_momen
     return y, theta, reactions, shear, moment
 
 def calc_kv_tip(N_tip, D, Ap, design_stage):
-    """Vertical tip spring (JRA) Kv_tip = (E0/B0)(D/B0)^(-3/4)/3 × Ap"""
+    """Vertical tip spring (JRA) Kv_tip = (E0/B0)(D/B0)^(-3/4)/3 ร— Ap"""
     B0 = 0.3
     E0_factor = 5600 if design_stage == "Seismic" else 2800
     E0 = E0_factor * N_tip
@@ -433,31 +433,31 @@ def draw_spring(x0, x1, y, n_coils=7):
     return xs, ys
 
 def validate_soil_profile(df):
-    """ตรวจสอบ Gap / Overlap ในชั้นดิน — ข้ามแถวที่ยังกรอก Depth ไม่ครบ"""
+    """เธ•เธฃเธงเธเธชเธญเธ Gap / Overlap เนเธเธเธฑเนเธเธ”เธดเธ โ€” เธเนเธฒเธกเนเธ–เธงเธ—เธตเนเธขเธฑเธเธเธฃเธญเธ Depth เนเธกเนเธเธฃเธ"""
     msgs = []
     if df is None or len(df) == 0:
-        return ["⚠️ ไม่มีข้อมูลชั้นดิน"]
-    # กรองเฉพาะแถวที่มีค่า Depth_From และ Depth_To (ป้องกัน TypeError จากแถวว่าง)
+        return ["โ ๏ธ เนเธกเนเธกเธตเธเนเธญเธกเธนเธฅเธเธฑเนเธเธ”เธดเธ"]
+    # เธเธฃเธญเธเน€เธเธเธฒเธฐเนเธ–เธงเธ—เธตเนเธกเธตเธเนเธฒ Depth_From เนเธฅเธฐ Depth_To (เธเนเธญเธเธเธฑเธ TypeError เธเธฒเธเนเธ–เธงเธงเนเธฒเธ)
     df_valid = df.dropna(subset=["Depth_From", "Depth_To"]).copy()
     if len(df_valid) == 0:
-        return []   # ยังไม่มีแถวสมบูรณ์ — ไม่แสดง warning
+        return []   # เธขเธฑเธเนเธกเนเธกเธตเนเธ–เธงเธชเธกเธเธนเธฃเธ“เน โ€” เนเธกเนเนเธชเธ”เธ warning
     df_sorted = df_valid.sort_values("Depth_From").reset_index(drop=True)
     for i in range(len(df_sorted)):
         if df_sorted.loc[i, "Depth_To"] <= df_sorted.loc[i, "Depth_From"]:
-            msgs.append(f"❌ แถวที่ {i+1}: Depth_To ({df_sorted.loc[i,'Depth_To']:.1f}) ต้องมากกว่า Depth_From ({df_sorted.loc[i,'Depth_From']:.1f})")
+            msgs.append(f"โ เนเธ–เธงเธ—เธตเน {i+1}: Depth_To ({df_sorted.loc[i,'Depth_To']:.1f}) เธ•เนเธญเธเธกเธฒเธเธเธงเนเธฒ Depth_From ({df_sorted.loc[i,'Depth_From']:.1f})")
         if i > 0:
             prev_to = df_sorted.loc[i-1, "Depth_To"]
             curr_from = df_sorted.loc[i, "Depth_From"]
             if abs(prev_to - curr_from) > 1e-6:
                 if curr_from > prev_to:
-                    msgs.append(f"⚠️ มีช่องว่าง (gap) ระหว่างแถว {i} ถึง {i+1}: {prev_to:.1f} → {curr_from:.1f} m")
+                    msgs.append(f"โ ๏ธ เธกเธตเธเนเธญเธเธงเนเธฒเธ (gap) เธฃเธฐเธซเธงเนเธฒเธเนเธ–เธง {i} เธ–เธถเธ {i+1}: {prev_to:.1f} โ’ {curr_from:.1f} m")
                 else:
-                    msgs.append(f"⚠️ ชั้นดินซ้อนทับ (overlap) ระหว่างแถว {i} ถึง {i+1}: {curr_from:.1f} < {prev_to:.1f} m")
+                    msgs.append(f"โ ๏ธ เธเธฑเนเธเธ”เธดเธเธเนเธญเธเธ—เธฑเธ (overlap) เธฃเธฐเธซเธงเนเธฒเธเนเธ–เธง {i} เธ–เธถเธ {i+1}: {curr_from:.1f} < {prev_to:.1f} m")
     return msgs
 
 def autofill_soil_row(row_dict):
-    """ดึงค่า typical จาก SOIL_DB มาใส่ให้อัตโนมัติ เมื่อรู้ Soil_Type + Consistency
-    คืนค่า (filled_dict, did_fill:bool)"""
+    """เธ”เธถเธเธเนเธฒ typical เธเธฒเธ SOIL_DB เธกเธฒเนเธชเนเนเธซเนเธญเธฑเธ•เนเธเธกเธฑเธ•เธด เน€เธกเธทเนเธญเธฃเธนเน Soil_Type + Consistency
+    เธเธทเธเธเนเธฒ (filled_dict, did_fill:bool)"""
     stype = str(row_dict.get("Soil_Type", "") or "")
     cons  = str(row_dict.get("Consistency", "") or "")
     if stype in SOIL_DB and cons in SOIL_DB[stype]:
@@ -520,9 +520,9 @@ def pile_section_figure(pile_type, D, B, H, Ap, Ipx, Ipy, Ep, compact=False):
         fig.add_annotation(x=ax_h, y=0, text=f"<b>H = {H:.2f} m</b>", showarrow=False, xshift=22,
                            font=dict(size=13, color='#c0392b'))
         lim = max(B, H) / 2 + pad
-        title_text = f"Square/Rect Pile  B×H = {B:.2f}×{H:.2f} m"
+        title_text = f"Square/Rect Pile  Bร—H = {B:.2f}ร—{H:.2f} m"
 
-    # ── X / Y axes ที่จุด CG ──
+    # โ”€โ”€ X / Y axes เธ—เธตเนเธเธธเธ” CG โ”€โ”€
     fig.add_annotation(ax=0, ay=0, x=axis_len, y=0, xref='x', yref='y', axref='x', ayref='y',
                        arrowhead=2, arrowsize=1.0, arrowwidth=2.0, arrowcolor='#333333', showarrow=True)
     fig.add_annotation(x=axis_len * 1.06, y=0, text="<b>X</b>", showarrow=False,
@@ -532,14 +532,14 @@ def pile_section_figure(pile_type, D, B, H, Ap, Ipx, Ipy, Ep, compact=False):
     fig.add_annotation(x=0, y=axis_len * 1.08, text="<b>Y</b>", showarrow=False,
                        font=dict(size=14, color='#333333', family='Arial Black'), xref='x', yref='y')
 
-    # CG marker + label (วางเฉียงเพื่อไม่ทับแกน)
+    # CG marker + label (เธงเธฒเธเน€เธเธตเธขเธเน€เธเธทเนเธญเนเธกเนเธ—เธฑเธเนเธเธ)
     fig.add_trace(go.Scatter(x=[0], y=[0], mode='markers',
                              marker=dict(color='red', size=12, symbol='x'),
                              showlegend=False, name='CG', hoverinfo='skip'))
     fig.add_annotation(x=axis_len * 0.18, y=-axis_len * 0.18, text="<b>CG</b>", showarrow=False,
                        font=dict(size=11, color='red'), xref='x', yref='y')
 
-    props_text = (f"Ap = {Ap:.4f} m²<br>Ix = {Ipx:.5f} m⁴<br>Iy = {Ipy:.5f} m⁴<br>Ep = {Ep/1000:.0f} MPa")
+    props_text = (f"Ap = {Ap:.4f} mยฒ<br>Ix = {Ipx:.5f} mโด<br>Iy = {Ipy:.5f} mโด<br>Ep = {Ep/1000:.0f} MPa")
     fig.add_annotation(x=lim * 0.98, y=lim * 0.78, xref='x', yref='y', text=props_text, showarrow=False,
                        align='left', bgcolor='rgba(255,255,255,0.85)', bordercolor='#aaa',
                        borderwidth=1, borderpad=6, font=dict(size=11, family='monospace'))
@@ -777,8 +777,8 @@ def pile_rebar_section_figure(pile_type, D, B, H, clear_cover_mm, tie_bar, main_
 
 def calculate_rebar_params(df_results, Ap):
     """Calculate rebar design parameters"""
-    kh_max_surface = df_results["kh_x [kN/m³]"].iloc[1] if len(df_results) > 1 else 0
-    kh_min_deep = df_results["kh_x [kN/m³]"].iloc[-1] if len(df_results) > 0 else 0
+    kh_max_surface = df_results["kh_x [kN/mยณ]"].iloc[1] if len(df_results) > 1 else 0
+    kh_min_deep = df_results["kh_x [kN/mยณ]"].iloc[-1] if len(df_results) > 0 else 0
     if kh_max_surface <= 5000:
         as_ratio_rec = 0.015
     elif kh_max_surface <= 15000:
@@ -885,8 +885,8 @@ def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx,
 
         # Sheet 1
         ws1 = wb.add_worksheet("Lateral Springs")
-        ws1.write(0, 0, f"Lateral Soil Spring Stiffness — Method: {method}", fmt_title)
-        ws1.write(1, 0, f"Pile: B={B:.2f}m H={H:.2f}m L={L:.1f}m f'c={fc:.0f}MPa ΔL={node_spacing:.2f}m p-mult={Pmult:.3f}", fmt_info)
+        ws1.write(0, 0, f"Lateral Soil Spring Stiffness โ€” Method: {method}", fmt_title)
+        ws1.write(1, 0, f"Pile: B={B:.2f}m H={H:.2f}m L={L:.1f}m f'c={fc:.0f}MPa ฮ”L={node_spacing:.2f}m p-mult={Pmult:.3f}", fmt_info)
         headers = list(df_results.columns)
         for ci, h in enumerate(headers):
             ws1.write(3, ci, h, fmt_header)
@@ -925,8 +925,8 @@ def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx,
         tip_data = [
             ("Parameter", "Value", "Unit"),
             ("N-SPT at pile tip", N_tip, "blow/30cm"),
-            ("E0 (at tip)", (2800 if design_stage=="Normal" else 5600)*N_tip, "kN/m²"),
-            ("Pile tip area Ap", Ap, "m²"),
+            ("E0 (at tip)", (2800 if design_stage=="Normal" else 5600)*N_tip, "kN/mยฒ"),
+            ("Pile tip area Ap", Ap, "mยฒ"),
             ("Kv_tip (vertical spring)", round(Kv_tip, 1), "kN/m"),
             ("Design Stage", design_stage, "-"),
         ]
@@ -943,11 +943,11 @@ def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx,
             ("Pile Height H [m]", H, "m"),
             ("Pile Length L [m]", L, "m"),
             ("f'c [MPa]", fc, "MPa"),
-            ("Ep [kN/m²]", round(Ep, 0), "kN/m²"),
-            ("Ap [m²]", round(Ap, 5), "m²"),
-            ("Ix (Bending about X) [m⁴]", round(Ipx, 6), "m⁴"),
-            ("Iy (Bending about Y) [m⁴]", round(Ipy, 6), "m⁴"),
-            ("Node Spacing ΔL [m]", node_spacing, "m"),
+            ("Ep [kN/mยฒ]", round(Ep, 0), "kN/mยฒ"),
+            ("Ap [mยฒ]", round(Ap, 5), "mยฒ"),
+            ("Ix (Bending about X) [mโด]", round(Ipx, 6), "mโด"),
+            ("Iy (Bending about Y) [mโด]", round(Ipy, 6), "mโด"),
+            ("Node Spacing ฮ”L [m]", node_spacing, "m"),
             ("kh Method", method, "-"),
             ("Design Stage", design_stage, "-"),
             ("Water Table [m]", water_table, "m"),
@@ -955,7 +955,7 @@ def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx,
             ("p-multiplier", Pmult, "-"),
             ("Spring Output", spring_output, "-"),
             ("Excel Export", "Global average + row-based sheets", "-"),
-            ("β (Characteristic Length) [1/m]", round(beta, 4), "1/m"),
+            ("ฮฒ (Characteristic Length) [1/m]", round(beta, 4), "1/m"),
             ("Kv_tip [kN/m]", round(Kv_tip, 1), "kN/m"),
         ]
         for ri, (k, v, u) in enumerate(summary):
@@ -974,10 +974,10 @@ def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx,
         ws5.write(0, 0, "Pile Reinforcement Design Guide (Based on Spring Results)", fmt_title)
         rebar_data = [
             ("Parameter", "Value", "Remark / Reference"),
-            ("Surface kh_x [kN/m³]", round(kh_max_surface, 1), "Used to evaluate soil stiffness condition"),
-            ("Deep kh_x [kN/m³]", round(kh_min_deep, 1), "Stiffness at pile tip layer"),
+            ("Surface kh_x [kN/mยณ]", round(kh_max_surface, 1), "Used to evaluate soil stiffness condition"),
+            ("Deep kh_x [kN/mยณ]", round(kh_min_deep, 1), "Stiffness at pile tip layer"),
             ("Recommended As Ratio", f"{as_ratio_rec*100:.1f}%", "Based on Crack Control / ACI 318"),
-            ("Minimum As [m²]", round(As_min, 4), "As = Ap x Ratio"),
+            ("Minimum As [mยฒ]", round(As_min, 4), "As = Ap x Ratio"),
             ("Min. Rebar Requirement", "See ACI 10.5.1 & 21.6", "Max of Code min. or Crack control min."),
         ]
         for ri, row in enumerate(rebar_data):
@@ -989,10 +989,10 @@ def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx,
     buf.seek(0)
     return buf.read()
 
-# ─────────────────────────────────────────────
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 #  SIDEBAR
-# ─────────────────────────────────────────────
-st.sidebar.title("🏗️ Pile Spring Calculator")
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
+st.sidebar.title("๐—๏ธ Pile Spring Calculator")
 st.sidebar.caption(f"version {VERSION}")
 st.sidebar.markdown("---")
 
@@ -1005,19 +1005,19 @@ for _msg_key, _box in (("_just_loaded_msg", st.sidebar.success),
 st.sidebar.header("1. Project Settings")
 c1, c2 = st.sidebar.columns(2)
 design_stage = c1.selectbox("Design Stage", ["Normal", "Seismic"], key="stage",
-                            help="Normal = ค่าใช้งาน, Seismic = E0 × 2 (กรณีแผ่นดินไหว)")
+                            help="Normal = เธเนเธฒเนเธเนเธเธฒเธ, Seismic = E0 ร— 2 (เธเธฃเธ“เธตเนเธเนเธเธ”เธดเธเนเธซเธง)")
 method       = c2.selectbox("kh Method", ["JRA", "Terzaghi", "Vesic 1961", "Broms 1964"], key="method",
-                            help="เลือกวิธีคำนวณ kh — แนะนำ JRA สำหรับงานทั่วไป")
+                            help="เน€เธฅเธทเธญเธเธงเธดเธเธตเธเธณเธเธงเธ“ kh โ€” เนเธเธฐเธเธณ JRA เธชเธณเธซเธฃเธฑเธเธเธฒเธเธ—เธฑเนเธงเนเธ")
 
 _method_tips = {
-    "JRA":        ("✅ แนะนำสำหรับออกแบบ", "success",
-                   "Primary method สำหรับงานสะพาน/highway\n• ใช้ N-SPT โดยตรง\n• Calibrated สำหรับดินเอเชีย\n• ยอมรับโดย DOH, MRTA, การรถไฟฯ"),
-    "Terzaghi":   ("⚖️ Cross-check", "info",
-                   "Conservative bound — kh ต่ำกว่า JRA\n• ใช้เทียบกับ JRA ถ้าต่างกัน <50% ถือว่าปลอดภัย"),
-    "Vesic 1961": ("⚠️ ต้องการ Es Lab", "warning",
-                   "ต้องการ Es จาก PMT/lab จริงเท่านั้น\n❌ ห้ามใช้ Es จาก N-SPT กับ Soft Clay"),
-    "Broms 1964": ("🚫 สำหรับ Capacity", "error",
-                   "ให้ค่า kh สูงเกินจริง (ใกล้ Failure)\n❌ ห้ามใช้เป็น spring ออกแบบเหล็กเสริม"),
+    "JRA":        ("โ… เนเธเธฐเธเธณเธชเธณเธซเธฃเธฑเธเธญเธญเธเนเธเธ", "success",
+                   "Primary method เธชเธณเธซเธฃเธฑเธเธเธฒเธเธชเธฐเธเธฒเธ/highway\nโ€ข เนเธเน N-SPT เนเธ”เธขเธ•เธฃเธ\nโ€ข Calibrated เธชเธณเธซเธฃเธฑเธเธ”เธดเธเน€เธญเน€เธเธตเธข\nโ€ข เธขเธญเธกเธฃเธฑเธเนเธ”เธข DOH, MRTA, เธเธฒเธฃเธฃเธ–เนเธเธฏ"),
+    "Terzaghi":   ("โ–๏ธ Cross-check", "info",
+                   "Conservative bound โ€” kh เธ•เนเธณเธเธงเนเธฒ JRA\nโ€ข เนเธเนเน€เธ—เธตเธขเธเธเธฑเธ JRA เธ–เนเธฒเธ•เนเธฒเธเธเธฑเธ <50% เธ–เธทเธญเธงเนเธฒเธเธฅเธญเธ”เธ เธฑเธข"),
+    "Vesic 1961": ("โ ๏ธ เธ•เนเธญเธเธเธฒเธฃ Es Lab", "warning",
+                   "เธ•เนเธญเธเธเธฒเธฃ Es เธเธฒเธ PMT/lab เธเธฃเธดเธเน€เธ—เนเธฒเธเธฑเนเธ\nโ เธซเนเธฒเธกเนเธเน Es เธเธฒเธ N-SPT เธเธฑเธ Soft Clay"),
+    "Broms 1964": ("๐ซ เธชเธณเธซเธฃเธฑเธ Capacity", "error",
+                   "เนเธซเนเธเนเธฒ kh เธชเธนเธเน€เธเธดเธเธเธฃเธดเธ (เนเธเธฅเน Failure)\nโ เธซเนเธฒเธกเนเธเนเน€เธเนเธ spring เธญเธญเธเนเธเธเน€เธซเธฅเนเธเน€เธชเธฃเธดเธก"),
 }
 _tip = _method_tips[method]
 with st.sidebar.expander(f"{_tip[0]}", expanded=True):
@@ -1027,38 +1027,38 @@ st.sidebar.header("2. Pile Properties")
 pile_type = st.sidebar.selectbox("Pile Type", ["Round", "Square/Rectangular"], key="pile_type")
 if pile_type == "Round":
     D = st.sidebar.number_input("Diameter D [m]", 0.1, 5.0, 0.6, 0.05, key="D",
-                                help="เส้นผ่านศูนย์กลางเสาเข็มกลม")
+                                help="เน€เธชเนเธเธเนเธฒเธเธจเธนเธเธขเนเธเธฅเธฒเธเน€เธชเธฒเน€เธเนเธกเธเธฅเธก")
     B = H = D
 else:
     c3, c4 = st.sidebar.columns(2)
-    B = c3.number_input("Width B [m]",  0.1, 5.0, 0.35, 0.05, key="B", help="ขนาดด้านที่ขนานแกน X")
-    H = c4.number_input("Height H [m]", 0.1, 5.0, 0.35, 0.05, key="H", help="ขนาดด้านที่ขนานแกน Y")
+    B = c3.number_input("Width B [m]",  0.1, 5.0, 0.35, 0.05, key="B", help="เธเธเธฒเธ”เธ”เนเธฒเธเธ—เธตเนเธเธเธฒเธเนเธเธ X")
+    H = c4.number_input("Height H [m]", 0.1, 5.0, 0.35, 0.05, key="H", help="เธเธเธฒเธ”เธ”เนเธฒเธเธ—เธตเนเธเธเธฒเธเนเธเธ Y")
     D = max(B, H)
 
 L            = st.sidebar.number_input("Pile Length L [m]",     1.0, 120.0, 25.0, 1.0,  key="L",
-                                       help="ความยาวเสาเข็มทั้งหมด")
+                                       help="เธเธงเธฒเธกเธขเธฒเธงเน€เธชเธฒเน€เธเนเธกเธ—เธฑเนเธเธซเธกเธ”")
 fc           = st.sidebar.number_input("Concrete f'c [MPa]",   15.0, 100.0, 28.0, 1.0,  key="fc",
-                                       help="กำลังอัดประลัยของคอนกรีต")
-node_spacing = st.sidebar.number_input("Node Spacing ΔL [m]",   0.25,  5.0,  1.0, 0.25, key="dl",
-                                       help="ระยะห่างของ Node สำหรับสร้าง spring")
+                                       help="เธเธณเธฅเธฑเธเธญเธฑเธ”เธเธฃเธฐเธฅเธฑเธขเธเธญเธเธเธญเธเธเธฃเธตเธ•")
+node_spacing = st.sidebar.number_input("Node Spacing ฮ”L [m]",   0.25,  5.0,  1.0, 0.25, key="dl",
+                                       help="เธฃเธฐเธขเธฐเธซเนเธฒเธเธเธญเธ Node เธชเธณเธซเธฃเธฑเธเธชเธฃเนเธฒเธ spring")
 
 if method == "Vesic 1961":
-    nu = st.sidebar.number_input("Poisson Ratio ν", 0.10, 0.50, 0.35, 0.05, key="nu")
+    nu = st.sidebar.number_input("Poisson Ratio ฮฝ", 0.10, 0.50, 0.35, 0.05, key="nu")
 else:
     nu = float(st.session_state.get("nu", 0.35))
 
 st.sidebar.header("3. Site Conditions")
 water_table = st.sidebar.number_input("Water Table Depth [m]", 0.0, float(L), 1.0,  0.5, key="wt",
-                                       help="ความลึกระดับน้ำใต้ดินจากผิวดิน (0 = น้ำท่วมผิวดิน)")
+                                       help="เธเธงเธฒเธกเธฅเธถเธเธฃเธฐเธ”เธฑเธเธเนเธณเนเธ•เนเธ”เธดเธเธเธฒเธเธเธดเธงเธ”เธดเธ (0 = เธเนเธณเธ—เนเธงเธกเธเธดเธงเธ”เธดเธ)")
 scour_depth = st.sidebar.number_input("Scour Depth [m]",       0.0, float(L), 0.0,  0.5, key="scour",
-                                       help="ความลึกที่ถูกกัดเซาะ — kh = 0 ตั้งแต่ผิวดินถึงระดับนี้")
+                                       help="เธเธงเธฒเธกเธฅเธถเธเธ—เธตเนเธ–เธนเธเธเธฑเธ”เน€เธเธฒเธฐ โ€” kh = 0 เธ•เธฑเนเธเนเธ•เนเธเธดเธงเธ”เธดเธเธ–เธถเธเธฃเธฐเธ”เธฑเธเธเธตเน")
 
 st.sidebar.header("4. Group Effect")
 use_group = st.sidebar.checkbox("Apply Group Effect (p-multiplier)", key="use_group",
-                                help="ใช้กับเสาเข็มกลุ่ม (≥ 2 ต้น)")
+                                help="เนเธเนเธเธฑเธเน€เธชเธฒเน€เธเนเธกเธเธฅเธธเนเธก (โฅ 2 เธ•เนเธ)")
 if use_group:
     s_D = st.sidebar.number_input("Pile Spacing s/D", 2.0, 12.0, 3.0, 0.5, key="sD",
-                                   help="อัตราส่วนระยะห่างระหว่างเสาต่อเส้นผ่านศูนย์กลาง")
+                                   help="เธญเธฑเธ•เธฃเธฒเธชเนเธงเธเธฃเธฐเธขเธฐเธซเนเธฒเธเธฃเธฐเธซเธงเนเธฒเธเน€เธชเธฒเธ•เนเธญเน€เธชเนเธเธเนเธฒเธเธจเธนเธเธขเนเธเธฅเธฒเธ")
     gc1, gc2 = st.sidebar.columns(2)
     nx = gc1.number_input("Piles in X", 1, 20, 3, 1, key="nx")
     ny = gc2.number_input("Piles in Y", 1, 20, 3, 1, key="ny")
@@ -1066,7 +1066,7 @@ if use_group:
         "Spring Output",
         ["Global average spring", "Row-based spring table"],
         key="spring_output",
-        help="เลือกตารางผลลัพธ์แบบค่าเฉลี่ยทั้งกลุ่ม หรือแบบแยกตาม row สำหรับแต่ละทิศทาง"
+        help="เน€เธฅเธทเธญเธเธ•เธฒเธฃเธฒเธเธเธฅเธฅเธฑเธเธเนเนเธเธเธเนเธฒเน€เธเธฅเธตเนเธขเธ—เธฑเนเธเธเธฅเธธเนเธก เธซเธฃเธทเธญเนเธเธเนเธขเธเธ•เธฒเธก row เธชเธณเธซเธฃเธฑเธเนเธ•เนเธฅเธฐเธ—เธดเธจเธ—เธฒเธ"
     )
     n_total = int(nx * ny)
 
@@ -1083,22 +1083,22 @@ if use_group:
     Pmult = sum(fm_vals) / n_total if n_total > 0 else 1.0
 
     if s_D >= 6.0:
-        st.sidebar.success("s/D ≥ 6 → fm = 1.00 (no reduction)")
+        st.sidebar.success("s/D โฅ 6 โ’ fm = 1.00 (no reduction)")
         Pmult = 1.0
         fms_x = [1.0] * int(nx)
         fms_y = [1.0] * int(ny)
     else:
         st.sidebar.info(
-            f"**Average fm = {Pmult:.3f}**  (ใช้ค่าเดียวทุกต้น)\n\n"
+            f"**Average fm = {Pmult:.3f}**  (เนเธเนเธเนเธฒเน€เธ”เธตเธขเธงเธ—เธธเธเธ•เนเธ)\n\n"
             f"nx={int(nx)}, ny={int(ny)}, n={n_total} piles\n\n"
-            f"Ref: FHWA-NHI-16-009 §9.4"
+            f"Ref: FHWA-NHI-16-009 ยง9.4"
         )
-        with st.sidebar.expander("📋 fm breakdown per row"):
-            st.caption("**X-direction rows** (loading → X)")
+        with st.sidebar.expander("๐“ fm breakdown per row"):
+            st.caption("**X-direction rows** (loading โ’ X)")
             for i, fm in enumerate(fms_x):
                 lbl = "Lead" if i==0 else ("2nd" if i==1 else "3rd+")
                 st.write(f"  Row {i+1} ({lbl}): fm = {fm:.3f}")
-            st.caption("**Y-direction rows** (loading → Y)")
+            st.caption("**Y-direction rows** (loading โ’ Y)")
             for i, fm in enumerate(fms_y):
                 lbl = "Lead" if i==0 else ("2nd" if i==1 else "3rd+")
                 st.write(f"  Row {i+1} ({lbl}): fm = {fm:.3f}")
@@ -1114,30 +1114,30 @@ else:
 pile_is_round = (pile_type == "Round")
 Ap, Ipx, Ipy, Ep, Deq_x, Deq_y = calc_pile_props("Round" if pile_is_round else "Square", D, B, H, fc)
 
-# ─────────────────────────────────────────────
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 #  TABS
-# ─────────────────────────────────────────────
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 st.title("Pile Lateral Soil Spring Stiffness Calculator")
 st.caption("Units: kN, m  |  Methods: JRA / Terzaghi 1955 / Vesic 1961 / Broms 1964")
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📝 Input & Pile Section", "📊 Results & Profile", "📈 kh & Spring Plots",
-    "🔧 Pile Reinforcement Design", "📚 N-SPT Reference", "📐 Formulas & References"
+    "Input & Pile Section", "Results & Profile", "kh & Spring Plots",
+    "Pile Design", "N-SPT Reference", "Formulas & References"
 ])
 
-# ════════ TAB 1 ════════
+# โ•โ•โ•โ•โ•โ•โ•โ• TAB 1 โ•โ•โ•โ•โ•โ•โ•โ•
 with tab1:
     left_col, right_col = st.columns([3, 2], gap="large")
     with right_col:
-        st.subheader("📐 Pile Cross-Section")
+        st.subheader("๐“ Pile Cross-Section")
         st.plotly_chart(pile_section_figure("Round" if pile_is_round else "Square",
                                             D, B, H, Ap, Ipx, Ipy, Ep, compact=True),
                         use_container_width=True)
         st.markdown("**Section Properties**")
         mc1, mc2 = st.columns(2)
-        mc1.metric("Ap [m²]", f"{Ap:.4f}"); mc2.metric("Ep [MPa]", f"{Ep/1000:.0f}")
+        mc1.metric("Ap [mยฒ]", f"{Ap:.4f}"); mc2.metric("Ep [MPa]", f"{Ep/1000:.0f}")
         mc3, mc4 = st.columns(2)
-        mc3.metric("Ix [m⁴]", f"{Ipx:.5f}"); mc4.metric("Iy [m⁴]", f"{Ipy:.5f}")
+        mc3.metric("Ix [mโด]", f"{Ipx:.5f}"); mc4.metric("Iy [mโด]", f"{Ipy:.5f}")
 
         st.subheader("Pile Group Plan")
         st.plotly_chart(
@@ -1149,14 +1149,14 @@ with tab1:
         )
 
     with left_col:
-        st.subheader("🪨 Soil Layer Input")
+        st.subheader("๐ชจ Soil Layer Input")
 
-        with st.expander("🗂️ เลือกโปรไฟล์ดินตัวอย่าง (Predefined Profiles)", expanded=False):
-            selected_profile = st.selectbox("เลือกโปรไฟล์:", list(SOIL_PROFILES.keys()),
+        with st.expander("๐—๏ธ เน€เธฅเธทเธญเธเนเธเธฃเนเธเธฅเนเธ”เธดเธเธ•เธฑเธงเธญเธขเนเธฒเธ (Predefined Profiles)", expanded=False):
+            selected_profile = st.selectbox("เน€เธฅเธทเธญเธเนเธเธฃเนเธเธฅเน:", list(SOIL_PROFILES.keys()),
                                             key="_profile_selector")
             st.dataframe(SOIL_PROFILES[selected_profile], use_container_width=True, hide_index=True)
-            st.info("**อ้างอิง:** โปรไฟล์กรุงเทพฯ สรุปจากชั้นดินเฉลี่ยทางภูมิศาสตร์ (กรมทรัพยากรธรณี, จุฬาฯ, ธรรมศาสตร์) ใช้สำหรับ Preliminary Design เท่านั้น")
-            if st.button("✅ ใช้โปรไฟล์นี้", use_container_width=True, type="primary",
+            st.info("**เธญเนเธฒเธเธญเธดเธ:** เนเธเธฃเนเธเธฅเนเธเธฃเธธเธเน€เธ—เธเธฏ เธชเธฃเธธเธเธเธฒเธเธเธฑเนเธเธ”เธดเธเน€เธเธฅเธตเนเธขเธ—เธฒเธเธ เธนเธกเธดเธจเธฒเธชเธ•เธฃเน (เธเธฃเธกเธ—เธฃเธฑเธเธขเธฒเธเธฃเธเธฃเธ“เธต, เธเธธเธฌเธฒเธฏ, เธเธฃเธฃเธกเธจเธฒเธชเธ•เธฃเน) เนเธเนเธชเธณเธซเธฃเธฑเธ Preliminary Design เน€เธ—เนเธฒเธเธฑเนเธ")
+            if st.button("โ… เนเธเนเนเธเธฃเนเธเธฅเนเธเธตเน", use_container_width=True, type="primary",
                          key="_use_profile_btn"):
                 st.session_state["_pending_profile"] = selected_profile
                 st.rerun()
@@ -1165,15 +1165,15 @@ with tab1:
         sand_opts = list(SOIL_DB["Sand"].keys())
         all_cons  = clay_opts + sand_opts
 
-        # ── FIX double-entry issue: บังคับ dtype ให้ตรงกับ column_config ก่อน ──
-        # st.data_editor จะ revert edit แรกถ้า dtype ไม่ตรง (เช่น int vs float)
+        # โ”€โ”€ FIX double-entry issue: เธเธฑเธเธเธฑเธ dtype เนเธซเนเธ•เธฃเธเธเธฑเธ column_config เธเนเธญเธ โ”€โ”€
+        # st.data_editor เธเธฐ revert edit เนเธฃเธเธ–เนเธฒ dtype เนเธกเนเธ•เธฃเธ (เน€เธเนเธ int vs float)
         _df_input = st.session_state.soil_layers.copy()
         for _col in ["Depth_From", "Depth_To", "SPT_N", "Es", "cu", "phi", "Gamma"]:
             if _col in _df_input.columns:
                 _df_input[_col] = pd.to_numeric(_df_input[_col], errors="coerce").astype(float)
 
-        # ── ส่ง _df_input เข้า editor โดยไม่ต้องเขียนกลับเข้า soil_layers ──
-        # (soil_layers ใช้เป็น "base for reset" เท่านั้น ไม่ update ทุก rerun)
+        # โ”€โ”€ เธชเนเธ _df_input เน€เธเนเธฒ editor เนเธ”เธขเนเธกเนเธ•เนเธญเธเน€เธเธตเธขเธเธเธฅเธฑเธเน€เธเนเธฒ soil_layers โ”€โ”€
+        # (soil_layers เนเธเนเน€เธเนเธ "base for reset" เน€เธ—เนเธฒเธเธฑเนเธ เนเธกเน update เธ—เธธเธ rerun)
         edited_df = st.data_editor(
             _df_input,
             num_rows="dynamic",
@@ -1187,11 +1187,11 @@ with tab1:
                 "SPT_N":        st.column_config.NumberColumn("N-SPT",      format="%.0f", width="small"),
                 "Es":           st.column_config.NumberColumn("Es [kPa]",   format="%.0f", width="small"),
                 "cu":           st.column_config.NumberColumn("cu [kPa]",   format="%.1f", width="small"),
-                "phi":          st.column_config.NumberColumn("φ [°]",      format="%.1f", width="small"),
-                "Gamma":        st.column_config.NumberColumn("γ [kN/m³]",  format="%.1f", width="small"),
+                "phi":          st.column_config.NumberColumn("ฯ [ยฐ]",      format="%.1f", width="small"),
+                "Gamma":        st.column_config.NumberColumn("ฮณ [kN/mยณ]",  format="%.1f", width="small"),
             }
         )
-        # ── AUTO-FILL: ตรวจจับการเปลี่ยน Soil_Type / Consistency → ดึงค่าจาก SOIL_DB ──
+        # โ”€โ”€ AUTO-FILL: เธ•เธฃเธงเธเธเธฑเธเธเธฒเธฃเน€เธเธฅเธตเนเธขเธ Soil_Type / Consistency โ’ เธ”เธถเธเธเนเธฒเธเธฒเธ SOIL_DB โ”€โ”€
         prev_tc   = st.session_state.get("_prev_type_cons", {})
         new_tc    = {}
         autofilled = edited_df.copy()
@@ -1202,8 +1202,8 @@ with tab1:
             cons  = str(row.get("Consistency", "") or "")
             new_tc[idx] = (stype, cons)
 
-            # เงื่อนไข trigger: (1) Type/Consistency เปลี่ยน หรือ (2) เป็นแถวใหม่ที่มีค่าครบ
-            # และ (3) ค่านั้นมีอยู่ใน SOIL_DB
+            # เน€เธเธทเนเธญเธเนเธ trigger: (1) Type/Consistency เน€เธเธฅเธตเนเธขเธ เธซเธฃเธทเธญ (2) เน€เธเนเธเนเธ–เธงเนเธซเธกเนเธ—เธตเนเธกเธตเธเนเธฒเธเธฃเธ
+            # เนเธฅเธฐ (3) เธเนเธฒเธเธฑเนเธเธกเธตเธญเธขเธนเนเนเธ SOIL_DB
             if (stype and cons
                     and stype in SOIL_DB
                     and cons in SOIL_DB.get(stype, {})
@@ -1216,43 +1216,43 @@ with tab1:
         st.session_state["_prev_type_cons"] = new_tc
 
         if did_fill:
-            # อัปเดต base + ล้าง editor state แล้ว rerun เพื่อแสดงค่าที่เติมแล้ว
+            # เธญเธฑเธเน€เธ”เธ• base + เธฅเนเธฒเธ editor state เนเธฅเนเธง rerun เน€เธเธทเนเธญเนเธชเธ”เธเธเนเธฒเธ—เธตเนเน€เธ•เธดเธกเนเธฅเนเธง
             st.session_state.soil_layers = autofilled
             for w in ("soil_editor", "_soil_edited"):
                 if w in st.session_state:
                     del st.session_state[w]
-            st.toast("✅ เติมค่าดินจาก SOIL_DB อัตโนมัติแล้ว", icon="🪨")
+            st.toast("โ… เน€เธ•เธดเธกเธเนเธฒเธ”เธดเธเธเธฒเธ SOIL_DB เธญเธฑเธ•เนเธเธกเธฑเธ•เธดเนเธฅเนเธง", icon="๐ชจ")
             st.rerun()
         else:
-            # ปกติ — เก็บผลใน key แยก ไม่เขียนกลับ soil_layers (ตัด feedback loop)
+            # เธเธเธ•เธด โ€” เน€เธเนเธเธเธฅเนเธ key เนเธขเธ เนเธกเนเน€เธเธตเธขเธเธเธฅเธฑเธ soil_layers (เธ•เธฑเธ” feedback loop)
             st.session_state["_soil_edited"] = edited_df
 
         # Validate soil layers
         _msgs = validate_soil_profile(edited_df)
         if _msgs:
-            with st.expander(f"⚠️ ตรวจพบปัญหาในข้อมูลชั้นดิน ({len(_msgs)} รายการ)", expanded=False):
+            with st.expander(f"โ ๏ธ เธ•เธฃเธงเธเธเธเธเธฑเธเธซเธฒเนเธเธเนเธญเธกเธนเธฅเธเธฑเนเธเธ”เธดเธ ({len(_msgs)} เธฃเธฒเธขเธเธฒเธฃ)", expanded=False):
                 for m in _msgs:
                     st.write(m)
 
-# ─────────────────────────────────────────────
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 #  MAIN CALCULATION
-# ─────────────────────────────────────────────
+# โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 df_soil = st.session_state.get("_soil_edited", st.session_state.soil_layers)
 
-# ── ตรวจสอบความสมบูรณ์ของข้อมูลดินก่อนคำนวณ ──
+# โ”€โ”€ เธ•เธฃเธงเธเธชเธญเธเธเธงเธฒเธกเธชเธกเธเธนเธฃเธ“เนเธเธญเธเธเนเธญเธกเธนเธฅเธ”เธดเธเธเนเธญเธเธเธณเธเธงเธ“ โ”€โ”€
 _REQUIRED_COLS = {
-    "Depth_From": "ความลึกเริ่มต้น (From)",
-    "Depth_To":   "ความลึกสิ้นสุด (To)",
-    "Soil_Type":  "ประเภทดิน (Type)",
-    "SPT_N":      "ค่า N-SPT",
+    "Depth_From": "เธเธงเธฒเธกเธฅเธถเธเน€เธฃเธดเนเธกเธ•เนเธ (From)",
+    "Depth_To":   "เธเธงเธฒเธกเธฅเธถเธเธชเธดเนเธเธชเธธเธ” (To)",
+    "Soil_Type":  "เธเธฃเธฐเน€เธ เธ—เธ”เธดเธ (Type)",
+    "SPT_N":      "เธเนเธฒ N-SPT",
 }
 _ready = True
 
-# กรองเฉพาะแถวที่กรอกข้อมูลบางส่วน (ไม่ใช่แถวว่างทั้งหมด)
+# เธเธฃเธญเธเน€เธเธเธฒเธฐเนเธ–เธงเธ—เธตเนเธเธฃเธญเธเธเนเธญเธกเธนเธฅเธเธฒเธเธชเนเธงเธ (เนเธกเนเนเธเนเนเธ–เธงเธงเนเธฒเธเธ—เธฑเนเธเธซเธกเธ”)
 _df_check = df_soil.dropna(how="all").copy()
 
 if len(_df_check) == 0:
-    st.warning("⚠️ กรุณากรอกข้อมูลชั้นดินอย่างน้อย 1 ชั้น ก่อนคำนวณ", icon="🪨")
+    st.warning("โ ๏ธ เธเธฃเธธเธ“เธฒเธเธฃเธญเธเธเนเธญเธกเธนเธฅเธเธฑเนเธเธ”เธดเธเธญเธขเนเธฒเธเธเนเธญเธข 1 เธเธฑเนเธ เธเนเธญเธเธเธณเธเธงเธ“", icon="๐ชจ")
     _ready = False
 else:
     _incomplete = []
@@ -1265,27 +1265,27 @@ else:
         if _missing:
             _row_no = _i + 1
             _depth_label = (f"From {_row.get('Depth_From','?')} m"
-                            if not pd.isna(_row.get("Depth_From")) else f"แถวที่ {_row_no}")
-            _incomplete.append(f"• **{_depth_label}** — ขาด: {', '.join(_missing)}")
+                            if not pd.isna(_row.get("Depth_From")) else f"เนเธ–เธงเธ—เธตเน {_row_no}")
+            _incomplete.append(f"โ€ข **{_depth_label}** โ€” เธเธฒเธ”: {', '.join(_missing)}")
 
     if _incomplete:
         st.warning(
-            "⚠️ **ข้อมูลชั้นดินยังกรอกไม่ครบ** กรุณาเติมค่าที่ขาดก่อนระบบจะคำนวณ:\n\n"
+            "โ ๏ธ **เธเนเธญเธกเธนเธฅเธเธฑเนเธเธ”เธดเธเธขเธฑเธเธเธฃเธญเธเนเธกเนเธเธฃเธ** เธเธฃเธธเธ“เธฒเน€เธ•เธดเธกเธเนเธฒเธ—เธตเนเธเธฒเธ”เธเนเธญเธเธฃเธฐเธเธเธเธฐเธเธณเธเธงเธ“:\n\n"
             + "\n".join(_incomplete),
-            icon="🪨"
+            icon="๐ชจ"
         )
         _ready = False
 
-    # ตรวจว่า pile ยาวกว่าชั้นดินที่กำหนดหรือเปล่า
+    # เธ•เธฃเธงเธเธงเนเธฒ pile เธขเธฒเธงเธเธงเนเธฒเธเธฑเนเธเธ”เธดเธเธ—เธตเนเธเธณเธซเธเธ”เธซเธฃเธทเธญเน€เธเธฅเนเธฒ
     if _ready:
         _df_valid = _df_check.dropna(subset=["Depth_From", "Depth_To"])
         _max_depth = _df_valid["Depth_To"].max() if len(_df_valid) > 0 else 0
         if L > _max_depth + 1e-3:
             st.warning(
-                f"⚠️ ความยาวเสาเข็ม **L = {L:.1f} m** เกินกว่าข้อมูลดินที่กรอก "
-                f"(ลึกสุด {_max_depth:.1f} m) — "
-                f"ระบบจะใช้ชั้นดินล่างสุดแทนสำหรับส่วนที่เกิน",
-                icon="⚠️"
+                f"โ ๏ธ เธเธงเธฒเธกเธขเธฒเธงเน€เธชเธฒเน€เธเนเธก **L = {L:.1f} m** เน€เธเธดเธเธเธงเนเธฒเธเนเธญเธกเธนเธฅเธ”เธดเธเธ—เธตเนเธเธฃเธญเธ "
+                f"(เธฅเธถเธเธชเธธเธ” {_max_depth:.1f} m) โ€” "
+                f"เธฃเธฐเธเธเธเธฐเนเธเนเธเธฑเนเธเธ”เธดเธเธฅเนเธฒเธเธชเธธเธ”เนเธ—เธเธชเธณเธซเธฃเธฑเธเธชเนเธงเธเธ—เธตเนเน€เธเธดเธ",
+                icon="โ ๏ธ"
             )
 
 depths  = np.arange(0, L + 1e-9, node_spacing)
@@ -1294,7 +1294,7 @@ if len(depths) == 0 or abs(depths[-1] - L) > 1e-6:
 tributary_lengths = calc_tributary_lengths(depths, L)
 results = []
 
-# df_soil_draw: version ที่กรองแถวไม่ครบออกแล้ว — ใช้สำหรับวาด UI ทุกที่
+# df_soil_draw: version เธ—เธตเนเธเธฃเธญเธเนเธ–เธงเนเธกเนเธเธฃเธเธญเธญเธเนเธฅเนเธง โ€” เนเธเนเธชเธณเธซเธฃเธฑเธเธงเธฒเธ” UI เธ—เธธเธเธ—เธตเน
 _req_draw = ["Depth_From", "Depth_To", "Soil_Type", "SPT_N"]
 df_soil_draw = df_soil.dropna(subset=_req_draw).copy()
 df_soil_draw = df_soil_draw[
@@ -1308,7 +1308,7 @@ if not _ready:
     beta  = 0.0; kh_avg = 0.0
     kh_max_surface = kh_min_deep = as_ratio_rec = As_min = 0.0
 else:
-    # กรองเฉพาะแถวที่มีข้อมูลครบก่อนคำนวณ — ตัดแถวที่กำลังพิมพ์ค้างออก
+    # เธเธฃเธญเธเน€เธเธเธฒเธฐเนเธ–เธงเธ—เธตเนเธกเธตเธเนเธญเธกเธนเธฅเธเธฃเธเธเนเธญเธเธเธณเธเธงเธ“ โ€” เธ•เธฑเธ”เนเธ–เธงเธ—เธตเนเธเธณเธฅเธฑเธเธเธดเธกเธเนเธเนเธฒเธเธญเธญเธ
     _req = ["Depth_From", "Depth_To", "Soil_Type", "SPT_N"]
     df_soil_calc = df_soil.dropna(subset=_req).copy()
     df_soil_calc = df_soil_calc[
@@ -1363,8 +1363,8 @@ else:
             "Trib. L [m]":  round(trib_len, 3),
             "Soil_Type":    soil_type,
             "N-SPT":        N_val,
-            "kh_x [kN/m³]": round(kh_x, 1),
-            "kh_y [kN/m³]": round(kh_y, 1),
+            "kh_x [kN/mยณ]": round(kh_x, 1),
+            "kh_y [kN/mยณ]": round(kh_y, 1),
             "Ksx [kN/m]":   round(Ksx, 1),
             "Ksy [kN/m]":   round(Ksy, 1),
             "pu [kN/m]":    round(pu, 1) if not np.isnan(pu) else np.nan,
@@ -1382,7 +1382,7 @@ else:
                     "fm":           round(float(fm), 3),
                     "Soil_Type":    soil_type,
                     "N-SPT":        N_val,
-                    "kh [kN/m³]":   round(kh_x, 1),
+                    "kh [kN/mยณ]":   round(kh_x, 1),
                     "kh [kN/m3]":   round(kh_x, 1),
                     "Deq [m]":      round(Deq_x, 3),
                     "Kspring [kN/m]": round(kh_x * Deq_x * trib_len * float(fm), 1),
@@ -1398,7 +1398,7 @@ else:
                     "fm":           round(float(fm), 3),
                     "Soil_Type":    soil_type,
                     "N-SPT":        N_val,
-                    "kh [kN/m³]":   round(kh_y, 1),
+                    "kh [kN/mยณ]":   round(kh_y, 1),
                     "kh [kN/m3]":   round(kh_y, 1),
                     "Deq [m]":      round(Deq_y, 3),
                     "Kspring [kN/m]": round(kh_y * Deq_y * trib_len * float(fm), 1),
@@ -1417,9 +1417,9 @@ else:
     N_tip          = float(tip_layer["SPT_N"])
     Kv_tip, kv_tip = calc_kv_tip(N_tip, max(Deq_x, Deq_y), Ap, design_stage)
 
-    # β — use Ipy for X-direction (bend about Y-axis)
+    # ฮฒ โ€” use Ipy for X-direction (bend about Y-axis)
     Ip_for_beta = Ipy if not pile_is_round else Ipx
-    kh_avg = df_results["kh_x [kN/m³]"].replace(0, np.nan).mean()
+    kh_avg = df_results["kh_x [kN/mยณ]"].replace(0, np.nan).mean()
     if pd.isna(kh_avg) or kh_avg <= 0 or Ep * Ip_for_beta <= 0:
         beta = 0.0
     else:
@@ -1427,7 +1427,7 @@ else:
 
     kh_max_surface, kh_min_deep, as_ratio_rec, As_min = calculate_rebar_params(df_results, Ap)
 
-# ── Sidebar Export ──
+# โ”€โ”€ Sidebar Export โ”€โ”€
 st.sidebar.header("5. Export")
 if _ready:
     try:
@@ -1437,7 +1437,7 @@ if _ready:
             kh_max_surface, kh_min_deep, as_ratio_rec, As_min, use_group, spring_output
         )
         st.sidebar.download_button(
-            "📥 Download Excel (.xlsx)",
+            "๐“ฅ Download Excel (.xlsx)",
             data=excel_data,
             file_name=f"PileSpring_{method}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1446,10 +1446,10 @@ if _ready:
     except RuntimeError as e:
         st.sidebar.error(str(e))
 else:
-    st.sidebar.button("📥 Download Excel (.xlsx)", disabled=True, use_container_width=True,
-                      help="กรุณากรอกข้อมูลชั้นดินให้ครบก่อน")
+    st.sidebar.button("๐“ฅ Download Excel (.xlsx)", disabled=True, use_container_width=True,
+                      help="เธเธฃเธธเธ“เธฒเธเธฃเธญเธเธเนเธญเธกเธนเธฅเธเธฑเนเธเธ”เธดเธเนเธซเนเธเธฃเธเธเนเธญเธ")
 
-# ── SAVE / LOAD PROJECT ──
+# โ”€โ”€ SAVE / LOAD PROJECT โ”€โ”€
 st.sidebar.header("6. Save / Load Project")
 
 project_data = save_project_to_dict(
@@ -1459,7 +1459,7 @@ project_data = save_project_to_dict(
 )
 json_str = json.dumps(project_data, indent=2, ensure_ascii=False)
 st.sidebar.download_button(
-    "💾 SAVE Project (.json)",
+    "๐’พ SAVE Project (.json)",
     data=json_str,
     file_name=f"PileProject_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.json",
     mime="application/json",
@@ -1468,13 +1468,13 @@ st.sidebar.download_button(
 
 st.sidebar.markdown("---")
 uploaded_file = st.sidebar.file_uploader(
-    "📂 OPEN Project File",
+    "๐“ OPEN Project File",
     type=["json"],
-    help="เลือกไฟล์ .json ที่บันทึกไว้จากปุ่ม SAVE",
+    help="เน€เธฅเธทเธญเธเนเธเธฅเน .json เธ—เธตเนเธเธฑเธเธ—เธถเธเนเธงเนเธเธฒเธเธเธธเนเธก SAVE",
     key="_project_uploader",
 )
 
-# ★ FIX: ใช้ pending-load pattern เพื่อหลีกเลี่ยง widget-state error
+# โ… FIX: เนเธเน pending-load pattern เน€เธเธทเนเธญเธซเธฅเธตเธเน€เธฅเธตเนเธขเธ widget-state error
 if uploaded_file is not None:
     file_id = getattr(uploaded_file, "file_id", uploaded_file.name + str(uploaded_file.size))
     last_id = st.session_state.get("_last_loaded_file_id")
@@ -1483,39 +1483,39 @@ if uploaded_file is not None:
             loaded_data = json.load(uploaded_file)
             updates = load_project_from_dict(loaded_data)
             updates["__msg__"] = (
-                f"✅ โหลดโปรเจกต์สำเร็จ! "
-                f"📅 บันทึกเมื่อ: {loaded_data.get('saved_timestamp', 'N/A')[:19]}"
+                f"โ… เนเธซเธฅเธ”เนเธเธฃเน€เธเธเธ•เนเธชเธณเน€เธฃเนเธ! "
+                f"๐“… เธเธฑเธเธ—เธถเธเน€เธกเธทเนเธญ: {loaded_data.get('saved_timestamp', 'N/A')[:19]}"
             )
             st.session_state["_pending_load"] = updates
             st.session_state["_last_loaded_file_id"] = file_id
             st.rerun()
         except json.JSONDecodeError as e:
-            st.sidebar.error(f"❌ ไฟล์ JSON ไม่ถูกต้อง: {e}")
+            st.sidebar.error(f"โ เนเธเธฅเน JSON เนเธกเนเธ–เธนเธเธ•เนเธญเธ: {e}")
         except Exception as e:
-            st.sidebar.error(f"❌ ไม่สามารถโหลดไฟล์ได้: {e}")
+            st.sidebar.error(f"โ เนเธกเนเธชเธฒเธกเธฒเธฃเธ–เนเธซเธฅเธ”เนเธเธฅเนเนเธ”เน: {e}")
 
 # Reset all
 st.sidebar.markdown("---")
 st.sidebar.caption(f"App Version {VERSION}")
 
-# ════════ TAB 2 — RESULTS & PROFILE ════════
+# โ•โ•โ•โ•โ•โ•โ•โ• TAB 2 โ€” RESULTS & PROFILE โ•โ•โ•โ•โ•โ•โ•โ•
 with tab2:
     mc = st.columns(5)
     mc[0].metric("Method", method)
-    mc[1].metric("β [1/m]",       f"{beta:.3f}"   if (_ready and beta > 0) else "—")
-    mc[2].metric("Kv_tip [kN/m]", f"{Kv_tip:,.0f}" if _ready else "—")
+    mc[1].metric("ฮฒ [1/m]",       f"{beta:.3f}"   if (_ready and beta > 0) else "โ€”")
+    mc[2].metric("Kv_tip [kN/m]", f"{Kv_tip:,.0f}" if _ready else "โ€”")
     if use_group and spring_output == "Row-based spring table":
         mc[3].metric("p-mult", "Row-based")
     else:
         mc[3].metric("Avg p-mult", f"{Pmult:.3f}")
-    mc[4].metric("Nodes",         len(depths) if _ready else "—")
+    mc[4].metric("Nodes",         len(depths) if _ready else "โ€”")
     st.divider()
 
     r_left, r_right = st.columns([2, 3], gap="medium")
     with r_left:
         st.subheader("Calculation Results")
         if not _ready or df_results.empty:
-            st.info("⏳ กรุณากรอกข้อมูลชั้นดินให้ครบก่อน ระบบจะแสดงผลลัพธ์ที่นี่", icon="🪨")
+            st.info("โณ เธเธฃเธธเธ“เธฒเธเธฃเธญเธเธเนเธญเธกเธนเธฅเธเธฑเนเธเธ”เธดเธเนเธซเนเธเธฃเธเธเนเธญเธ เธฃเธฐเธเธเธเธฐเนเธชเธ”เธเธเธฅเธฅเธฑเธเธเนเธ—เธตเนเธเธตเน", icon="๐ชจ")
         else:
             if use_group and spring_output == "Row-based spring table" and not df_row_results.empty:
                 st.caption("Row-based output: one spring stiffness per depth, direction, and pile row.")
@@ -1524,7 +1524,7 @@ with tab2:
                     "Trib. L [m]":    "{:.3f}",
                     "fm":             "{:.3f}",
                     "N-SPT":          "{:.0f}",
-                    "kh [kN/mยณ]":    "{:,.0f}",
+                    "kh [kN/mเธขเธ“]":    "{:,.0f}",
                     "kh [kN/m3]":     "{:,.0f}",
                     "Deq [m]":        "{:.3f}",
                     "Kspring [kN/m]": "{:,.1f}",
@@ -1533,8 +1533,8 @@ with tab2:
                 st.caption("Global average output: Ksx and Ksy use the average p-multiplier shown in the sidebar.")
                 st.dataframe(df_results.style.format({
                 "Depth [m]":    "{:.2f}",
-                "kh_x [kN/m³]": "{:,.0f}",
-                "kh_y [kN/m³]": "{:,.0f}",
+                "kh_x [kN/mยณ]": "{:,.0f}",
+                "kh_y [kN/mยณ]": "{:,.0f}",
                 "Ksx [kN/m]":   "{:,.1f}",
                 "Ksy [kN/m]":   "{:,.1f}"
             }), use_container_width=True, height=580)
@@ -1590,7 +1590,7 @@ with tab2:
                                         name="Kv_tip", showlegend=False))
         fig_p.add_hline(y=water_table, line_dash="dash", line_color="#2196F3",
                         line_width=1.5,
-                        annotation_text=f"▼ WT @ {water_table:.1f} m",
+                        annotation_text=f"โ–ผ WT @ {water_table:.1f} m",
                         annotation_position="right")
         fig_p.update_layout(height=700,
                             yaxis=dict(autorange="reversed", title="Depth [m]"),
@@ -1599,20 +1599,20 @@ with tab2:
                             margin=dict(l=10, r=10, t=20, b=10))
         st.plotly_chart(fig_p, use_container_width=True)
 
-# ════════ TAB 3 — PLOTS ════════
+# โ•โ•โ•โ•โ•โ•โ•โ• TAB 3 โ€” PLOTS โ•โ•โ•โ•โ•โ•โ•โ•
 with tab3:
     if not _ready or df_results.empty:
-        st.info("⏳ กรุณากรอกข้อมูลชั้นดินให้ครบก่อน ระบบจะแสดงกราฟที่นี่", icon="🪨")
+        st.info("โณ เธเธฃเธธเธ“เธฒเธเธฃเธญเธเธเนเธญเธกเธนเธฅเธเธฑเนเธเธ”เธดเธเนเธซเนเธเธฃเธเธเนเธญเธ เธฃเธฐเธเธเธเธฐเนเธชเธ”เธเธเธฃเธฒเธเธ—เธตเนเธเธตเน", icon="๐ชจ")
     else:
       p1, p2 = st.columns(2)
       with p1:
         st.subheader("kh vs Depth (Base kh before p-mult)")
         fig_kh = go.Figure()
-        fig_kh.add_trace(go.Scatter(x=df_results["kh_x [kN/m³]"], y=df_results["Depth [m]"],
+        fig_kh.add_trace(go.Scatter(x=df_results["kh_x [kN/mยณ]"], y=df_results["Depth [m]"],
                                     mode='lines+markers', name='kh_x',
                                     line=dict(color='#1a4f8a', width=2), marker=dict(size=5)))
         if not pile_is_round:
-            fig_kh.add_trace(go.Scatter(x=df_results["kh_y [kN/m³]"], y=df_results["Depth [m]"],
+            fig_kh.add_trace(go.Scatter(x=df_results["kh_y [kN/mยณ]"], y=df_results["Depth [m]"],
                                         mode='lines+markers', name='kh_y',
                                         line=dict(color='#c0392b', width=2, dash='dash'),
                                         marker=dict(size=5)))
@@ -1625,7 +1625,7 @@ with tab3:
                              annotation_position="top left")
         fig_kh.update_layout(height=500,
                              yaxis=dict(autorange="reversed", title="Depth [m]"),
-                             xaxis=dict(title="kh [kN/m³]"),
+                             xaxis=dict(title="kh [kN/mยณ]"),
                              legend=dict(orientation="h", yanchor="bottom",
                                          y=1.02, xanchor="right", x=1,
                                          bgcolor="rgba(255,255,255,0.85)",
@@ -1673,132 +1673,343 @@ with tab3:
                              margin=dict(l=10, r=10, t=60, b=10))
         st.plotly_chart(fig_ks, use_container_width=True)
 
-      st.subheader("β — Relative Stiffness")
+      st.subheader("ฮฒ โ€” Relative Stiffness")
       if beta > 0:
         st.info(
-            f"β = (kh·D / 4EpIp)^0.25 = **{beta:.4f} m⁻¹** | "
-            f"1/β = **{1/beta:.2f} m** (characteristic length) | "
-            f"Leff = 4/β = **{4/beta:.2f} m** | "
-            f"{'✅ Long pile (L > 4/β)' if L > 4/beta else '⚠️ Short pile (L < 4/β)'}"
+            f"ฮฒ = (khยทD / 4EpIp)^0.25 = **{beta:.4f} mโปยน** | "
+            f"1/ฮฒ = **{1/beta:.2f} m** (characteristic length) | "
+            f"Leff = 4/ฮฒ = **{4/beta:.2f} m** | "
+            f"{'โ… Long pile (L > 4/ฮฒ)' if L > 4/beta else 'โ ๏ธ Short pile (L < 4/ฮฒ)'}"
         )
       else:
-        st.warning("β cannot be computed — kh เฉลี่ยเป็น 0 (ตรวจสอบ scour depth, soil profile)")
+        st.warning("ฮฒ cannot be computed โ€” kh เน€เธเธฅเธตเนเธขเน€เธเนเธ 0 (เธ•เธฃเธงเธเธชเธญเธ scour depth, soil profile)")
 
     st.divider()
-    st.subheader("📌 คำแนะนำการเลือก Method — Engineering Guidance")
-    with st.expander("🔍 ทำไม kh แต่ละ Method จึงให้ค่าต่างกัน และควรใช้ Method ใด?", expanded=True):
+    st.subheader("๐“ เธเธณเนเธเธฐเธเธณเธเธฒเธฃเน€เธฅเธทเธญเธ Method โ€” Engineering Guidance")
+    with st.expander("๐” เธ—เธณเนเธก kh เนเธ•เนเธฅเธฐ Method เธเธถเธเนเธซเนเธเนเธฒเธ•เนเธฒเธเธเธฑเธ เนเธฅเธฐเธเธงเธฃเนเธเน Method เนเธ”?", expanded=True):
         col_g1, col_g2 = st.columns(2)
         with col_g1:
             st.markdown("""
-**ลำดับค่า kh ไม่คงที่ — ขึ้นกับ soil type และ depth**
+**เธฅเธณเธ”เธฑเธเธเนเธฒ kh เนเธกเนเธเธเธ—เธตเน โ€” เธเธถเนเธเธเธฑเธ soil type เนเธฅเธฐ depth**
 
-| สถานการณ์ | ลำดับ kh (ต่ำ → สูง) |
+| เธชเธ–เธฒเธเธเธฒเธฃเธ“เน | เธฅเธณเธ”เธฑเธ kh (เธ•เนเธณ โ’ เธชเธนเธ) |
 |-----------|----------------------|
-| Soft Clay, z < 5m | Terzaghi ≪ Vesic < JRA ≪ Broms |
-| Stiff Clay, z > 10m | Terzaghi < JRA ≈ Vesic ≪ Broms |
-| Loose Sand, z < 3m | Terzaghi < Vesic < JRA ≪ Broms |
-| Dense Sand, z > 10m | Vesic < JRA < Terzaghi ≪ Broms |
+| Soft Clay, z < 5m | Terzaghi โช Vesic < JRA โช Broms |
+| Stiff Clay, z > 10m | Terzaghi < JRA โ Vesic โช Broms |
+| Loose Sand, z < 3m | Terzaghi < Vesic < JRA โช Broms |
+| Dense Sand, z > 10m | Vesic < JRA < Terzaghi โช Broms |
 
-**Broms ให้ค่าสูงเสมอ เพราะ:**
-kh = pu / (0.01D × D) คำนวณจาก ultimate resistance
-ที่ displacement = 1%D ซึ่งใกล้ failure แล้ว
-**ไม่ใช่ elastic stiffness** → ห้ามใช้เป็น spring ใน FEA
+**Broms เนเธซเนเธเนเธฒเธชเธนเธเน€เธชเธกเธญ เน€เธเธฃเธฒเธฐ:**
+kh = pu / (0.01D ร— D) เธเธณเธเธงเธ“เธเธฒเธ ultimate resistance
+เธ—เธตเน displacement = 1%D เธเธถเนเธเนเธเธฅเน failure เนเธฅเนเธง
+**เนเธกเนเนเธเน elastic stiffness** โ’ เธซเนเธฒเธกเนเธเนเน€เธเนเธ spring เนเธ FEA
 """)
         with col_g2:
             st.markdown("""
-**คำแนะนำสำหรับออกแบบเหล็กเสริมเสาเข็ม**
+**เธเธณเนเธเธฐเธเธณเธชเธณเธซเธฃเธฑเธเธญเธญเธเนเธเธเน€เธซเธฅเนเธเน€เธชเธฃเธดเธกเน€เธชเธฒเน€เธเนเธก**
 
-| Method | บทบาท | เหตุผล |
+| Method | เธเธ—เธเธฒเธ— | เน€เธซเธ•เธธเธเธฅ |
 |--------|--------|--------|
-| ✅ **JRA** | Primary design | Calibrated สำหรับงานสะพาน, ใช้ N-SPT โดยตรง, DOH/MRTA ยอมรับ |
-| ⚖️ **Terzaghi** | Cross-check | Conservative bound, ถ้า JRA vs Terzaghi ต่างกัน <50% → มั่นใจได้ |
-| ⚠️ **Vesic** | งานพิเศษ | ใช้ได้เฉพาะมี Es จาก PMT/lab จริง ไม่ใช่จาก N-SPT correlation |
-| 🚫 **Broms** | Capacity check เท่านั้น | ไม่เหมาะเป็น FEA spring → displacement น้อยกว่าจริง |
+| โ… **JRA** | Primary design | Calibrated เธชเธณเธซเธฃเธฑเธเธเธฒเธเธชเธฐเธเธฒเธ, เนเธเน N-SPT เนเธ”เธขเธ•เธฃเธ, DOH/MRTA เธขเธญเธกเธฃเธฑเธ |
+| โ–๏ธ **Terzaghi** | Cross-check | Conservative bound, เธ–เนเธฒ JRA vs Terzaghi เธ•เนเธฒเธเธเธฑเธ <50% โ’ เธกเธฑเนเธเนเธเนเธ”เน |
+| โ ๏ธ **Vesic** | เธเธฒเธเธเธดเน€เธจเธฉ | เนเธเนเนเธ”เนเน€เธเธเธฒเธฐเธกเธต Es เธเธฒเธ PMT/lab เธเธฃเธดเธ เนเธกเนเนเธเนเธเธฒเธ N-SPT correlation |
+| ๐ซ **Broms** | Capacity check เน€เธ—เนเธฒเธเธฑเนเธ | เนเธกเนเน€เธซเธกเธฒเธฐเน€เธเนเธ FEA spring โ’ displacement เธเนเธญเธขเธเธงเนเธฒเธเธฃเธดเธ |
 
-**Workflow แนะนำ:**
-1. คำนวณด้วย JRA → ใช้ออกแบบ
-2. Cross-check ด้วย Terzaghi → ตรวจสอบความสมเหตุสมผล
-3. ถ้าผลต่างกัน > 50% → ตรวจสอบ N-SPT อีกครั้ง
-4. Report ระบุ: *"JRA method, cross-checked with Terzaghi"*
+**Workflow เนเธเธฐเธเธณ:**
+1. เธเธณเธเธงเธ“เธ”เนเธงเธข JRA โ’ เนเธเนเธญเธญเธเนเธเธ
+2. Cross-check เธ”เนเธงเธข Terzaghi โ’ เธ•เธฃเธงเธเธชเธญเธเธเธงเธฒเธกเธชเธกเน€เธซเธ•เธธเธชเธกเธเธฅ
+3. เธ–เนเธฒเธเธฅเธ•เนเธฒเธเธเธฑเธ > 50% โ’ เธ•เธฃเธงเธเธชเธญเธ N-SPT เธญเธตเธเธเธฃเธฑเนเธ
+4. Report เธฃเธฐเธเธธ: *"JRA method, cross-checked with Terzaghi"*
 
-> **หมายเหตุ:** สำหรับดิน Soft Bangkok Clay (N=1–4) ในช่วง 0–15 m
-> ค่า kh ต่ำมากทุก method — ซึ่งถูกต้องตามพฤติกรรมจริงของดิน
+> **เธซเธกเธฒเธขเน€เธซเธ•เธธ:** เธชเธณเธซเธฃเธฑเธเธ”เธดเธ Soft Bangkok Clay (N=1โ€“4) เนเธเธเนเธงเธ 0โ€“15 m
+> เธเนเธฒ kh เธ•เนเธณเธกเธฒเธเธ—เธธเธ method โ€” เธเธถเนเธเธ–เธนเธเธ•เนเธญเธเธ•เธฒเธกเธเธคเธ•เธดเธเธฃเธฃเธกเธเธฃเธดเธเธเธญเธเธ”เธดเธ
 """)
 
-# ════════ TAB 4 — REINFORCEMENT ════════
+# โ•โ•โ•โ•โ•โ•โ•โ• TAB 4 โ€” REINFORCEMENT โ•โ•โ•โ•โ•โ•โ•โ•
 with tab4:
-    st.header("🔧 Recommend Spring for Pile Reinforcement Design")
-    st.markdown("""
-    การออกแบบเหล็กเสริมเสาเข็ม (Longitudinal และ Shear/Links) ภายใต้แรงด้านข้างนั้น **Spring Stiffness (kh) มีผลโดยตรง** โดย:
-    - **Shear Force (V):** ขึ้นกับความชันของ Bending Moment Diagram ซึ่งขึ้นกับ **ค่า kh ด้านนอก (Outer Layers)**
-    - **Longitudinal Rebar:** ต้องควบคุม Crack Width ซึ่งขึ้นกับ Service Moment ที่ได้จากค่า **kh ด้านใน (Inner Layers)**
-    """)
-
-    st.subheader("1. การเลือก Method สำหรับออกแบบเหล็กเสริม (Workflow แนะนำ)")
-    col_w1, col_w2 = st.columns(2)
-    with col_w1:
-        st.success("""
-        **✅ ใช้ค่าจาก JRA Method เป็นหลัก**
-        **เหตุผล:**
-        1. ค่า JRA อยู่ระหว่าง Conservative (Terzaghi) และ Unconservative (Broms)
-        2. ให้ Moment Envelope ที่สมจริงที่สุดสำหรับดินในไทย
-        3. ถูกตรวจสอบและยืนยันโดย MRTA และ DOH สำหรับงานจริง
-        """)
-    with col_w2:
-        st.info("""
-        **⚖️ ใช้ Terzaghi Cross-check เพื่อความปลอดภัย**
-        - ให้ค่า kh ต่ำ → Moment สูงขึ้น → เหล็กเสริมมากขึ้น
-        - หากค่าเหล็กจาก JRA ใกล้เคียงกับ Min. Rebar (ACI) → ไม่จำเป็นต้องใช้ Terzaghi
-        - หากค่าเหล็กจาก JRA ต่ำมาก → ควรตรวจสอบด้วย Terzaghi เพื่อความปลอดภัย
-        """)
-
-    st.divider()
-    st.subheader("2. Minimum Longitudinal Reinforcement (อิงจาก Crack Control & ACI)")
-    st.caption("สำหรับเสาเข็มที่ทนแรงด้านข้าง ค่า Min. As ไม่ใช่เพียง 1% ของ Ap ตาม ACI 10.5.1 แต่ควรควบคุมจาก Serviceability (Crack Width)")
+    st.header("Pile Design")
+    st.caption(
+        "Preliminary reinforced concrete pile design using the calculated lateral springs. "
+        "The tab solves pile-head loading on a Winkler beam, then uses the resulting axial force, shear, "
+        "and moment profiles to check main bars and transverse reinforcement."
+    )
 
     if not _ready or df_results.empty:
-        st.info("⏳ กรุณากรอกข้อมูลชั้นดินให้ครบก่อน ระบบจะแสดงคำแนะนำที่นี่", icon="🪨")
+        st.info("Please complete the soil profile first. Pile Design uses the calculated spring table.", icon="ℹ️")
     else:
-        st.write(f"**สภาพดินจาก Input:** kh ที่ผิวดิน = {kh_max_surface:,.0f} kN/m³ | kh ชั้นลึก = {kh_min_deep:,.0f} kN/m³")
+        source_options = ["Global average spring"]
+        if use_group and not df_row_results.empty:
+            source_options.append("Row-based spring")
 
-        if kh_max_surface <= 5000:
-            st.warning(f"🟠 **Soft Clay / Very Low kh:** แรงดันดินยังไม่สามารถรับแรงด้านข้างได้ดี ควรใช้ As >= **{as_ratio_rec*100:.1f}%** ของ Ap เพื่อควบคุมรอยร้าว")
-        elif kh_max_surface <= 15000:
-            st.success(f"🟢 **Medium Stiff Clay / Low kh:** ใช้ As >= **{as_ratio_rec*100:.1f}%** ของ Ap (ตาม ACI 10.5.1 ทั่วไป)")
+        sel1, sel2, sel3 = st.columns([1.2, 1.0, 1.0])
+        spring_source = sel1.selectbox(
+            "Spring source",
+            source_options,
+            help="Global average uses Ksx/Ksy from the main results table. Row-based uses one selected pile row."
+        )
+        design_direction = sel2.selectbox(
+            "Loading direction",
+            ["X", "Y"],
+            help="X loading uses Ksx and bending about the Y-axis. Y loading uses Ksy and bending about the X-axis."
+        )
+
+        if spring_source == "Row-based spring":
+            row_limit = int(nx) if design_direction == "X" else int(ny)
+            design_row = sel3.selectbox(
+                "Pile row",
+                list(range(1, row_limit + 1)),
+                help="Select the pile row to design when using the row-based spring table."
+            )
         else:
-            st.success(f"🔵 **Stiff Clay / Sand (High kh):** ดินช่วยรับแรงได้ดี สามารถใช้ As >= **{as_ratio_rec*100:.1f}%** ของ Ap ได้")
+            design_row = 1
+            sel3.metric("Pile row", "Average")
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Ap [m²]", f"{Ap:.4f}")
-        c2.metric("Recommended As Ratio", f"{as_ratio_rec*100:.1f}%")
-        c3.metric("Min. As [m²]", f"{As_min:.4f}", help="ค่าพื้นที่เหล็กเสริมขั้นต่ำที่แนะนำสำหรับออกแบบ")
+        load_c1, load_c2, load_c3 = st.columns(3)
+        Pu_kN = load_c1.number_input(
+            "Factored axial compression Pu [kN]",
+            min_value=0.0,
+            value=1500.0,
+            step=100.0,
+            help="Compression-positive axial load used along the pile length."
+        )
+        Hu_kN = load_c2.number_input(
+            "Pile-head shear H [kN]",
+            min_value=0.0,
+            value=200.0,
+            step=10.0,
+            help="Applied lateral shear at pile head for the selected direction."
+        )
+        Mu_kNm = load_c3.number_input(
+            "Pile-head moment M [kN-m]",
+            min_value=0.0,
+            value=100.0,
+            step=10.0,
+            help="Applied bending moment at pile head."
+        )
 
-    st.divider()
-    st.subheader("3. Shear Reinforcement (Links) Guidance")
-    st.markdown("""
-    การหาปริมาณเหล็กลูกตั้ง (Shear Links) ขึ้นกับ **Maximum Shear Force (Vu)** ที่เกิดขึ้นภายในเสาเข็ม
-    - **Vu สูงสุดมักเกิดที่ระดับพื้นดิน (Ground Level) หรือช่วง Scour Depth**
-    - ค่า Vu ขึ้นกับค่า **kh ที่ระดับผิวดินชั้นนอกสุด** (เพราะดินชั้นนอกจะสร้างแรงต้านสูงสุดตอนเริ่มเคลื่อนที่)
-    - **หากใช้ JRA:** ให้ดึงค่า `Ksx` ที่ Node แรกๆ (ภายใต้ Scour) ไปใส่ในโปรแกรม FEA (SAP2000/ETABS) เพื่อหา Diagram ของ Vu แล้วค่อยออกแบบ Links ตาม ACI 318 Chapter 22
-    """)
+        det1, det2, det3, det4 = st.columns(4)
+        cover_mm = det1.number_input("Clear cover [mm]", min_value=40, max_value=150, value=75, step=5)
+        main_bar = det2.selectbox("Main bar", list(REBAR_DB.keys()), index=2)
+        tie_bar = det3.selectbox("Tie / spiral bar", list(REBAR_DB.keys()), index=1)
+        tie_spacing_mm = det4.number_input("Provided tie spacing [mm]", min_value=50, max_value=400, value=150, step=10)
 
-# ════════ TAB 5 — REFERENCE ════════
+        if pile_type == "Round":
+            cfg1, cfg2 = st.columns(2)
+            n_main_bars = cfg1.number_input("Number of main bars", min_value=4, max_value=40, value=10, step=1)
+            n_tie_legs = cfg2.number_input("Equivalent tie legs", min_value=2, max_value=8, value=2, step=1)
+            n_b_face = n_h_face = None
+        else:
+            cfg1, cfg2, cfg3 = st.columns(3)
+            n_b_face = cfg1.number_input("Bars on B face", min_value=2, max_value=20, value=4, step=1)
+            n_h_face = cfg2.number_input("Bars on H face", min_value=2, max_value=20, value=4, step=1)
+            n_tie_legs = cfg3.number_input("Tie legs", min_value=2, max_value=8, value=2, step=1)
+            n_main_bars = None
+
+        if spring_source == "Global average spring":
+            spring_df = df_results.copy()
+            spring_k = spring_df["Ksx [kN/m]"].to_numpy(dtype=float) if design_direction == "X" else spring_df["Ksy [kN/m]"].to_numpy(dtype=float)
+            spring_note = (
+                f"Using {'Ksx' if design_direction == 'X' else 'Ksy'} from the global average spring table."
+            )
+        else:
+            spring_df = df_row_results[
+                (df_row_results["Direction"] == design_direction)
+                & (df_row_results["Row No."] == int(design_row))
+            ].sort_values("Node").copy()
+            spring_k = spring_df["Kspring [kN/m]"].to_numpy(dtype=float)
+            if spring_df.empty:
+                spring_note = "No row-based spring data available."
+            else:
+                row_pos = spring_df["Row Position"].iloc[0]
+                spring_note = (
+                    f"Using row-based spring for {design_direction} direction, row {design_row} ({row_pos})."
+                )
+
+        EI = Ep * (Ipy if design_direction == "X" else Ipx)
+        design_ok = len(spring_k) == len(depths) and np.any(np.abs(spring_k) > 1e-9)
+        response_error = None
+        if design_ok:
+            try:
+                disp_m, theta_rad, soil_reaction_kN, shear_kN, moment_kNm = solve_pile_lateral_response(
+                    depths, spring_k, EI, head_shear=Hu_kN, head_moment=Mu_kNm
+                )
+            except Exception as exc:
+                response_error = str(exc)
+                design_ok = False
+        else:
+            response_error = "The selected spring source is empty or does not align with the pile depth nodes."
+
+        st.info(spring_note)
+        if response_error:
+            st.error(f"Pile response analysis could not run: {response_error}")
+        else:
+            axial_kN = np.full(len(depths), float(Pu_kN), dtype=float)
+            design_profile = pd.DataFrame({
+                "Node": np.arange(1, len(depths) + 1),
+                "Depth [m]": depths,
+                "Axial P [kN]": axial_kN,
+                "Shear V [kN]": shear_kN,
+                "Moment M [kN-m]": moment_kNm,
+                "Disp. y [mm]": disp_m * 1000.0,
+                "Soil Reaction [kN]": soil_reaction_kN,
+            })
+
+            Mu_max = float(np.max(np.abs(moment_kNm))) if len(moment_kNm) else 0.0
+            Vu_max = float(np.max(np.abs(shear_kN))) if len(shear_kN) else 0.0
+            ymax_mm = float(np.max(np.abs(disp_m)) * 1000.0) if len(disp_m) else 0.0
+            z_mu = float(depths[np.argmax(np.abs(moment_kNm))]) if len(moment_kNm) else 0.0
+            z_vu = float(depths[np.argmax(np.abs(shear_kN))]) if len(shear_kN) else 0.0
+
+            design_summary = calc_pile_design_summary(
+                pile_type, D, B, H, fc, cover_mm, main_bar, tie_bar,
+                design_direction, Pu_kN, Vu_max, Mu_max, n_main_bars,
+                n_b_face, n_h_face, n_tie_legs, as_ratio_rec
+            )
+            tie_ok = float(tie_spacing_mm) <= float(design_summary["s_rec_mm"]) + 1e-9
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Max |M| [kN-m]", f"{Mu_max:,.1f}", f"at z = {z_mu:.2f} m")
+            m2.metric("Max |V| [kN]", f"{Vu_max:,.1f}", f"at z = {z_vu:.2f} m")
+            m3.metric("Axial Pu [kN]", f"{Pu_kN:,.1f}")
+            m4.metric("Max |y| [mm]", f"{ymax_mm:,.2f}")
+
+            left_design, right_design = st.columns([1.15, 1.0], gap="large")
+            with left_design:
+                st.subheader("Pile Section with Reinforcement")
+                st.plotly_chart(
+                    pile_rebar_section_figure(
+                        pile_type, D, B, H, cover_mm, tie_bar, main_bar,
+                        n_round_bars=n_main_bars, n_b_face=n_b_face, n_h_face=n_h_face
+                    ),
+                    use_container_width=True
+                )
+                section_info = [
+                    ("Main bar", f"{design_summary['total_main_bars']} {main_bar}", f"fy = {design_summary['fy_main']:.0f} MPa"),
+                    ("Provided As", f"{design_summary['as_provided_mm2']:,.0f} mm²", f"{design_summary['as_provided_mm2'] / 100.0:,.1f} cm²"),
+                    ("Required As", f"{design_summary['as_req_total_mm2']:,.0f} mm²", f"{design_summary['as_req_total_mm2'] / 100.0:,.1f} cm²"),
+                    ("Tie bar", tie_bar, f"fy = {design_summary['fy_tie']:.0f} MPa"),
+                    ("Recommended tie spacing", f"{design_summary['s_rec_mm']:.0f} mm", f"provided = {tie_spacing_mm:.0f} mm"),
+                ]
+                st.table(pd.DataFrame(section_info, columns=["Item", "Value", "Note"]))
+
+            with right_design:
+                st.subheader("Preliminary Design Check")
+                ck1, ck2 = st.columns(2)
+                ck1.metric(
+                    "Main bars",
+                    "OK" if design_summary["main_ok"] else "Increase bars",
+                    f"As prov / req = {design_summary['as_provided_mm2'] / max(design_summary['as_req_total_mm2'], 1e-6):.2f}"
+                )
+                ck2.metric(
+                    "Tie spacing",
+                    "OK" if tie_ok else "Tighter spacing",
+                    f"Rec. <= {design_summary['s_rec_mm']:.0f} mm"
+                )
+                st.markdown(
+                    f"""
+                    - **Main bar steel:** `{design_summary['total_main_bars']} {main_bar}`
+                    - **Provided main steel:** `{design_summary['as_provided_mm2']:,.0f} mm²`
+                    - **Minimum steel from spring guide:** `{design_summary['as_min_mm2']:,.0f} mm²`
+                    - **Axial steel demand:** `{design_summary['as_req_axial_mm2']:,.0f} mm²`
+                    - **Flexural steel demand:** `{design_summary['as_req_flex_mm2']:,.0f} mm²`
+                    - **Effective depth d:** `{design_summary['d_eff_mm']:.0f} mm`
+                    - **Concrete shear strength Vc:** `{design_summary['vc_n'] / 1000.0:,.1f} kN`
+                    """
+                )
+                st.caption(design_summary["shear_status"])
+                if not design_summary["main_ok"]:
+                    st.warning("Provided main reinforcement is below the preliminary requirement. Increase bar size or quantity.")
+                if not tie_ok:
+                    st.warning("Provided tie spacing is larger than the preliminary recommended spacing.")
+
+            st.subheader("Pile Force Diagrams")
+            g1, g2, g3 = st.columns(3)
+
+            fig_axial = go.Figure()
+            fig_axial.add_trace(go.Scatter(
+                x=design_profile["Axial P [kN]"], y=design_profile["Depth [m]"],
+                mode="lines+markers", line=dict(color="#2c7fb8", width=2), marker=dict(size=5),
+                name="P"
+            ))
+            fig_axial.update_layout(
+                height=420, margin=dict(l=10, r=10, t=40, b=10),
+                yaxis=dict(autorange="reversed", title="Depth [m]"),
+                xaxis=dict(title="Axial Compression P [kN]"),
+                title=dict(text="Axial Force Along Pile", font=dict(size=14))
+            )
+            g1.plotly_chart(fig_axial, use_container_width=True)
+
+            fig_m = go.Figure()
+            fig_m.add_trace(go.Scatter(
+                x=design_profile["Moment M [kN-m]"], y=design_profile["Depth [m]"],
+                mode="lines+markers", line=dict(color="#d95f0e", width=2), marker=dict(size=5),
+                fill="tozerox", fillcolor="rgba(217,95,14,0.10)", name="M"
+            ))
+            fig_m.update_layout(
+                height=420, margin=dict(l=10, r=10, t=40, b=10),
+                yaxis=dict(autorange="reversed", title="Depth [m]"),
+                xaxis=dict(title="Moment M [kN-m]"),
+                title=dict(text="Bending Moment Along Pile", font=dict(size=14))
+            )
+            g2.plotly_chart(fig_m, use_container_width=True)
+
+            fig_v = go.Figure()
+            fig_v.add_trace(go.Scatter(
+                x=design_profile["Shear V [kN]"], y=design_profile["Depth [m]"],
+                mode="lines+markers", line=dict(color="#31a354", width=2), marker=dict(size=5),
+                fill="tozerox", fillcolor="rgba(49,163,84,0.10)", name="V"
+            ))
+            fig_v.update_layout(
+                height=420, margin=dict(l=10, r=10, t=40, b=10),
+                yaxis=dict(autorange="reversed", title="Depth [m]"),
+                xaxis=dict(title="Shear V [kN]"),
+                title=dict(text="Shear Force Along Pile", font=dict(size=14))
+            )
+            g3.plotly_chart(fig_v, use_container_width=True)
+
+            with st.expander("Detailed pile design table", expanded=False):
+                st.dataframe(
+                    design_profile.style.format({
+                        "Depth [m]": "{:.2f}",
+                        "Axial P [kN]": "{:,.1f}",
+                        "Shear V [kN]": "{:,.1f}",
+                        "Moment M [kN-m]": "{:,.1f}",
+                        "Disp. y [mm]": "{:,.3f}",
+                        "Soil Reaction [kN]": "{:,.1f}",
+                    }),
+                    use_container_width=True,
+                    height=420
+                )
+
+            with st.expander("Design assumptions and workflow", expanded=False):
+                st.markdown(
+                    """
+                    1. This tab uses the already-calculated lateral spring profile from the main spring analysis.
+                    2. Axial compression is treated as constant along pile length from the applied `Pu`.
+                    3. Shear and moment are obtained from a free-head Winkler beam model using the selected spring source.
+                    4. Main bar demand is checked with a simplified axial-plus-flexure estimate and the recommended steel ratio from the spring stiffness guide.
+                    5. Tie spacing is checked with a preliminary ACI-style shear calculation and confinement spacing limit.
+                    6. Final pile design should still be confirmed with project-specific load combinations, interaction checks, detailing rules, and code provisions.
+                    """
+                )
+
+# โ•โ•โ•โ•โ•โ•โ•โ• TAB 5 โ€” REFERENCE โ•โ•โ•โ•โ•โ•โ•โ•
 with tab5:
-    st.subheader("📚 N-SPT Reference Values")
-    st.markdown("### 🔵 Clay")
+    st.subheader("๐“ N-SPT Reference Values")
+    st.markdown("### ๐”ต Clay")
     clay_ref = [{"Consistency": cons, "Typical N": db["N"], "cu [kPa]": db["cu"],
-                 "Es [kPa]": db["Es"], "α (Bowles)": db["alpha"]}
+                 "Es [kPa]": db["Es"], "ฮฑ (Bowles)": db["alpha"]}
                 for cons, db in SOIL_DB["Clay"].items()]
     st.dataframe(pd.DataFrame(clay_ref), use_container_width=True, hide_index=True)
-    st.markdown("### 🟡 Sand")
-    sand_ref = [{"Density": cons, "Typical N": db["N"], "φ [°]": db["phi"],
+    st.markdown("### ๐ก Sand")
+    sand_ref = [{"Density": cons, "Typical N": db["N"], "ฯ [ยฐ]": db["phi"],
                  "Es [kPa]": db["Es"], "nh wet": db["nh_wet"]}
                 for cons, db in SOIL_DB["Sand"].items()]
     st.dataframe(pd.DataFrame(sand_ref), use_container_width=True, hide_index=True)
 
-# ════════ TAB 6 — FORMULAS ════════
+# โ•โ•โ•โ•โ•โ•โ•โ• TAB 6 โ€” FORMULAS โ•โ•โ•โ•โ•โ•โ•โ•
 with tab6:
-    st.subheader("📐 Formulas & References")
+    st.subheader("๐“ Formulas & References")
     st.markdown("**1. JRA:** $k_h = \\dfrac{E_0}{B_0} \\left(\\dfrac{D}{B_0}\\right)^{-3/4}$, $B_0=0.3$ m")
     st.markdown("**2. Terzaghi (Sand):** $k_h = \\dfrac{n_h \\cdot z}{D}$  |  **(Clay):** $k_h = \\dfrac{\\alpha \\cdot c_u}{D}$")
     st.markdown("**3. Vesic 1961:** $k_h = 0.65 \\left(\\dfrac{E_s D^4}{E_p I_p}\\right)^{1/12} \\cdot \\dfrac{E_s}{D(1-\\nu^2)}$")
@@ -1809,19 +2020,20 @@ with tab6:
 
     st.divider()
     st.markdown("""
-    ### 📝 Convention Notes
-    - **Loading width convention** (this app): X-loading uses $D_x = B$, Y-loading uses $D_y = H$ — JRA-style
-    - **For X-direction loading:** pile bends about Y-axis → $I_p = I_y$ (used in $\\beta$ and Vesic)
+    ### ๐“ Convention Notes
+    - **Loading width convention** (this app): X-loading uses $D_x = B$, Y-loading uses $D_y = H$ โ€” JRA-style
+    - **For X-direction loading:** pile bends about Y-axis โ’ $I_p = I_y$ (used in $\\beta$ and Vesic)
     - **Global Average spring:** uses average group p-multiplier $P_{mult}$ for $K_{sx}$ and $K_{sy}$ (single global spring per depth)
     - **Row-based spring table:** uses row-specific $f_m$ for each loading direction and row number; $K_{spring}=k_h \\cdot D_{eq} \\cdot L_{trib} \\cdot f_m$
     - **Sand below water table:** $E_0 \\times 0.6$ for JRA (built-in); Vesic uses $E_s \\times 0.6$ likewise
 
-    ### 📚 References
-    1. **JRA (2002, 2017)** — *Specifications for Highway Bridges*, Japan Road Association
-    2. **Bowles, J.E. (1997)** — *Foundation Analysis and Design*, 5th ed., McGraw-Hill (Tables 9-1, 9-3)
-    3. **Vesic, A.S. (1961)** — *Beams on Elastic Subgrade and the Winkler's Hypothesis*
-    4. **Broms, B.B. (1964)** — *Lateral Resistance of Piles in Cohesive/Cohesionless Soils*
-    5. **AASHTO LRFD (2020)** — Table 10.7.2.4-1 (p-multiplier)
-    6. **FHWA-NHI-16-009** — *Design and Construction of Driven Pile Foundations*, §9.4
-    7. **Reese, L.C. & Van Impe, W.F. (2011)** — *Single Piles and Pile Groups Under Lateral Loading*
+    ### ๐“ References
+    1. **JRA (2002, 2017)** โ€” *Specifications for Highway Bridges*, Japan Road Association
+    2. **Bowles, J.E. (1997)** โ€” *Foundation Analysis and Design*, 5th ed., McGraw-Hill (Tables 9-1, 9-3)
+    3. **Vesic, A.S. (1961)** โ€” *Beams on Elastic Subgrade and the Winkler's Hypothesis*
+    4. **Broms, B.B. (1964)** โ€” *Lateral Resistance of Piles in Cohesive/Cohesionless Soils*
+    5. **AASHTO LRFD (2020)** โ€” Table 10.7.2.4-1 (p-multiplier)
+    6. **FHWA-NHI-16-009** โ€” *Design and Construction of Driven Pile Foundations*, ยง9.4
+    7. **Reese, L.C. & Van Impe, W.F. (2011)** โ€” *Single Piles and Pile Groups Under Lateral Loading*
     """)
+
