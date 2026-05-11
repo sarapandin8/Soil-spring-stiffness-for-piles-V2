@@ -1,4 +1,4 @@
-﻿import streamlit as st
+import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -323,12 +323,10 @@ def group_row_position(row_index):
     return "Lead Row" if row_index == 0 else ("2nd Row" if row_index == 1 else "3rd Row+")
 
 def get_rebar_area_mm2(bar_name):
-    """Nominal reinforcing bar area in mmยฒ."""
     dia_mm = float(REBAR_DB[bar_name]["dia_mm"])
     return np.pi * dia_mm**2 / 4.0
 
 def get_rebar_fy_mpa(bar_name):
-    """Yield strength of reinforcing bar in MPa."""
     return float(REBAR_DB[bar_name]["fy_mpa"])
 
 def calc_pile_props(pile_type, D, B, H, fc):
@@ -349,7 +347,7 @@ def calc_pile_props(pile_type, D, B, H, fc):
     return Ap, Ipx, Ipy, Ep, Deq_x, Deq_y
 
 def solve_pile_lateral_response(depths, spring_k, EI, head_shear=0.0, head_moment=0.0):
-    """Solve a Winkler beam with free head loads and nodal springs."""
+    """Solve a Winkler beam with free-head loads and nodal springs."""
     depths = np.asarray(depths, dtype=float)
     spring_k = np.asarray(spring_k, dtype=float)
     n = len(depths)
@@ -372,16 +370,16 @@ def solve_pile_lateral_response(depths, spring_k, EI, head_shear=0.0, head_momen
         if le <= 0:
             raise ValueError("Depth nodes must be strictly increasing for pile response analysis.")
         ke = EI / le**3 * np.array([
-            [12.0,   6.0 * le, -12.0,   6.0 * le],
-            [6.0*le, 4.0*le**2, -6.0*le, 2.0*le**2],
-            [-12.0, -6.0 * le,  12.0,  -6.0 * le],
-            [6.0*le, 2.0*le**2, -6.0*le, 4.0*le**2],
+            [12.0, 6.0 * le, -12.0, 6.0 * le],
+            [6.0 * le, 4.0 * le**2, -6.0 * le, 2.0 * le**2],
+            [-12.0, -6.0 * le, 12.0, -6.0 * le],
+            [6.0 * le, 2.0 * le**2, -6.0 * le, 4.0 * le**2],
         ], dtype=float)
-        idx = [2*i, 2*i + 1, 2*i + 2, 2*i + 3]
+        idx = [2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 3]
         K[np.ix_(idx, idx)] += ke
 
     for i, k_val in enumerate(spring_k):
-        K[2*i, 2*i] += max(float(k_val), 0.0)
+        K[2 * i, 2 * i] += max(float(k_val), 0.0)
 
     u = np.linalg.solve(K, F)
     y = u[0::2]
@@ -391,9 +389,9 @@ def solve_pile_lateral_response(depths, spring_k, EI, head_shear=0.0, head_momen
     shear = np.zeros(n, dtype=float)
     moment = np.zeros(n, dtype=float)
     for i, z in enumerate(depths):
-        shear[i] = head_shear - reactions[:i+1].sum()
-        arm = z - depths[:i+1]
-        moment[i] = head_moment + head_shear * z - np.sum(reactions[:i+1] * arm)
+        shear[i] = head_shear - reactions[:i + 1].sum()
+        arm = z - depths[:i + 1]
+        moment[i] = head_moment + head_shear * z - np.sum(reactions[:i + 1] * arm)
 
     return y, theta, reactions, shear, moment
 
@@ -696,8 +694,10 @@ def pile_group_plan_figure(pile_type, D, B, H, s_D, nx, ny, use_group):
     )
     return fig
 
-def pile_rebar_section_figure(pile_type, D, B, H, clear_cover_mm, tie_bar, main_bar,
-                              n_round_bars=None, n_b_face=None, n_h_face=None):
+def pile_rebar_section_figure(
+    pile_type, D, B, H, clear_cover_mm, tie_bar, main_bar,
+    n_round_bars=None, n_b_face=None, n_h_face=None
+):
     """Section figure with perimeter reinforcement arrangement."""
     fig = go.Figure()
     main_dia_mm = float(REBAR_DB[main_bar]["dia_mm"])
@@ -710,68 +710,107 @@ def pile_rebar_section_figure(pile_type, D, B, H, clear_cover_mm, tie_bar, main_
     if pile_type == "Round":
         radius = D / 2.0
         r_bar = max(radius - cover_m - tie_dia_m - main_dia_m / 2.0, main_dia_m)
-        theta = np.linspace(0, 2*np.pi, 200)
+        theta = np.linspace(0, 2 * np.pi, 200)
         fig.add_trace(go.Scatter(
-            x=np.cos(theta) * radius, y=np.sin(theta) * radius,
-            fill='toself', fillcolor='rgba(100,160,220,0.20)',
-            line=dict(color='#1a4f8a', width=2.5), showlegend=False, hoverinfo='skip'
+            x=np.cos(theta) * radius,
+            y=np.sin(theta) * radius,
+            fill="toself",
+            fillcolor="rgba(100,160,220,0.20)",
+            line=dict(color="#1a4f8a", width=2.5),
+            showlegend=False,
+            hoverinfo="skip"
         ))
         fig.add_trace(go.Scatter(
-            x=np.cos(theta) * (radius - cover_m - tie_dia_m/2),
-            y=np.sin(theta) * (radius - cover_m - tie_dia_m/2),
-            mode='lines', line=dict(color='#555', width=1.6, dash='dash'),
-            showlegend=False, hoverinfo='skip'
+            x=np.cos(theta) * (radius - cover_m - tie_dia_m / 2),
+            y=np.sin(theta) * (radius - cover_m - tie_dia_m / 2),
+            mode="lines",
+            line=dict(color="#555", width=1.6, dash="dash"),
+            showlegend=False,
+            hoverinfo="skip"
         ))
         n_bars = max(int(n_round_bars or 6), 4)
-        for ang in np.linspace(0, 2*np.pi, n_bars, endpoint=False):
+        for ang in np.linspace(0, 2 * np.pi, n_bars, endpoint=False):
             bar_coords.append((r_bar * np.cos(ang), r_bar * np.sin(ang)))
         title = f"Pile Design Section - Round ({n_bars} {main_bar})"
         lim = radius * 1.55
     else:
-        x0, x1 = -B/2.0, B/2.0
-        y0, y1 = -H/2.0, H/2.0
+        x0, x1 = -B / 2.0, B / 2.0
+        y0, y1 = -H / 2.0, H / 2.0
         fig.add_trace(go.Scatter(
-            x=[x0, x1, x1, x0, x0], y=[y0, y0, y1, y1, y0],
-            fill='toself', fillcolor='rgba(100,160,220,0.20)',
-            line=dict(color='#1a4f8a', width=2.5), showlegend=False, hoverinfo='skip'
+            x=[x0, x1, x1, x0, x0],
+            y=[y0, y0, y1, y1, y0],
+            fill="toself",
+            fillcolor="rgba(100,160,220,0.20)",
+            line=dict(color="#1a4f8a", width=2.5),
+            showlegend=False,
+            hoverinfo="skip"
         ))
-        x_t0 = x0 + cover_m + tie_dia_m/2
-        x_t1 = x1 - cover_m - tie_dia_m/2
-        y_t0 = y0 + cover_m + tie_dia_m/2
-        y_t1 = y1 - cover_m - tie_dia_m/2
+        x_t0 = x0 + cover_m + tie_dia_m / 2
+        x_t1 = x1 - cover_m - tie_dia_m / 2
+        y_t0 = y0 + cover_m + tie_dia_m / 2
+        y_t1 = y1 - cover_m - tie_dia_m / 2
         fig.add_trace(go.Scatter(
-            x=[x_t0, x_t1, x_t1, x_t0, x_t0], y=[y_t0, y_t0, y_t1, y_t1, y_t0],
-            mode='lines', line=dict(color='#555', width=1.6, dash='dash'),
-            showlegend=False, hoverinfo='skip'
+            x=[x_t0, x_t1, x_t1, x_t0, x_t0],
+            y=[y_t0, y_t0, y_t1, y_t1, y_t0],
+            mode="lines",
+            line=dict(color="#555", width=1.6, dash="dash"),
+            showlegend=False,
+            hoverinfo="skip"
         ))
 
         nb = max(int(n_b_face or 3), 2)
         nh = max(int(n_h_face or 3), 2)
-        x_bar = np.linspace(x0 + cover_m + tie_dia_m + main_dia_m/2, x1 - cover_m - tie_dia_m - main_dia_m/2, nb)
-        y_bar = np.linspace(y0 + cover_m + tie_dia_m + main_dia_m/2, y1 - cover_m - tie_dia_m - main_dia_m/2, nh)
+        x_bar = np.linspace(
+            x0 + cover_m + tie_dia_m + main_dia_m / 2,
+            x1 - cover_m - tie_dia_m - main_dia_m / 2,
+            nb
+        )
+        y_bar = np.linspace(
+            y0 + cover_m + tie_dia_m + main_dia_m / 2,
+            y1 - cover_m - tie_dia_m - main_dia_m / 2,
+            nh
+        )
         for x in x_bar:
             bar_coords.append((x, y_bar[0]))
             bar_coords.append((x, y_bar[-1]))
         for y in y_bar[1:-1]:
             bar_coords.append((x_bar[0], y))
             bar_coords.append((x_bar[-1], y))
-        title = f"Pile Design Section - Rectangular ({2*(nb+nh)-4} {main_bar})"
+        title = f"Pile Design Section - Rectangular ({2 * (nb + nh) - 4} {main_bar})"
         lim = max(B, H) * 0.95
 
     if bar_coords:
         bx, by = zip(*bar_coords)
         fig.add_trace(go.Scatter(
-            x=bx, y=by, mode='markers',
-            marker=dict(size=max(main_dia_mm * 0.75, 10), color='#c0392b', line=dict(color='white', width=1)),
-            showlegend=False, hoverinfo='skip'
+            x=bx,
+            y=by,
+            mode="markers",
+            marker=dict(
+                size=max(main_dia_mm * 0.75, 10),
+                color="#c0392b",
+                line=dict(color="white", width=1)
+            ),
+            showlegend=False,
+            hoverinfo="skip"
         ))
 
     fig.update_layout(
-        title=dict(text=title, font=dict(size=14, color='#1a4f8a')),
-        xaxis=dict(scaleanchor='y', scaleratio=1, range=[-lim, lim], showgrid=True, gridcolor='rgba(180,180,180,0.25)'),
-        yaxis=dict(range=[-lim, lim], showgrid=True, gridcolor='rgba(180,180,180,0.25)'),
-        height=420, margin=dict(l=10, r=10, t=40, b=10),
-        plot_bgcolor='rgba(245,248,255,0.85)'
+        title=dict(text=title, font=dict(size=14, color="#1a4f8a")),
+        xaxis=dict(
+            scaleanchor="y",
+            scaleratio=1,
+            range=[-lim, lim],
+            showgrid=True,
+            gridcolor="rgba(180,180,180,0.25)"
+        ),
+        yaxis=dict(
+            range=[-lim, lim],
+            showgrid=True,
+            gridcolor="rgba(180,180,180,0.25)"
+        ),
+        height=420,
+        margin=dict(l=10, r=10, t=40, b=10),
+        plot_bgcolor="rgba(245,248,255,0.85)"
     )
     return fig
 
@@ -788,9 +827,11 @@ def calculate_rebar_params(df_results, Ap):
     As_min = Ap * as_ratio_rec
     return kh_max_surface, kh_min_deep, as_ratio_rec, As_min
 
-def calc_pile_design_summary(pile_type, D, B, H, fc, cover_mm, main_bar, tie_bar,
-                             direction, Pu_kN, shear_kN, moment_kNm, n_main_bars,
-                             n_b_face, n_h_face, n_tie_legs, as_ratio_rec):
+def calc_pile_design_summary(
+    pile_type, D, B, H, fc, cover_mm, main_bar, tie_bar,
+    direction, Pu_kN, shear_kN, moment_kNm, n_main_bars,
+    n_b_face, n_h_face, n_tie_legs, as_ratio_rec
+):
     """Preliminary RC pile design summary based on axial, moment, and shear demand."""
     main_dia_mm = float(REBAR_DB[main_bar]["dia_mm"])
     tie_dia_mm = float(REBAR_DB[tie_bar]["dia_mm"])
@@ -1730,12 +1771,12 @@ with tab4:
     st.header("Pile Design")
     st.caption(
         "Preliminary reinforced concrete pile design using the calculated lateral springs. "
-        "The tab solves pile-head loading on a Winkler beam, then uses the resulting axial force, shear, "
-        "and moment profiles to check main bars and transverse reinforcement."
+        "This section solves pile-head loading on a Winkler beam, then checks main bars and ties "
+        "from the resulting axial force, shear, and moment profiles."
     )
 
     if not _ready or df_results.empty:
-        st.info("Please complete the soil profile first. Pile Design uses the calculated spring table.", icon="ℹ️")
+        st.info("Please complete the soil profile first. Pile Design uses the calculated spring table.")
     else:
         source_options = ["Global average spring"]
         if use_group and not df_row_results.empty:
@@ -1807,10 +1848,12 @@ with tab4:
 
         if spring_source == "Global average spring":
             spring_df = df_results.copy()
-            spring_k = spring_df["Ksx [kN/m]"].to_numpy(dtype=float) if design_direction == "X" else spring_df["Ksy [kN/m]"].to_numpy(dtype=float)
-            spring_note = (
-                f"Using {'Ksx' if design_direction == 'X' else 'Ksy'} from the global average spring table."
+            spring_k = (
+                spring_df["Ksx [kN/m]"].to_numpy(dtype=float)
+                if design_direction == "X"
+                else spring_df["Ksy [kN/m]"].to_numpy(dtype=float)
             )
+            spring_note = f"Using {'Ksx' if design_direction == 'X' else 'Ksy'} from the global average spring table."
         else:
             spring_df = df_row_results[
                 (df_row_results["Direction"] == design_direction)
@@ -1821,9 +1864,7 @@ with tab4:
                 spring_note = "No row-based spring data available."
             else:
                 row_pos = spring_df["Row Position"].iloc[0]
-                spring_note = (
-                    f"Using row-based spring for {design_direction} direction, row {design_row} ({row_pos})."
-                )
+                spring_note = f"Using row-based spring for {design_direction} direction, row {design_row} ({row_pos})."
 
         EI = Ep * (Ipy if design_direction == "X" else Ipx)
         design_ok = len(spring_k) == len(depths) and np.any(np.abs(spring_k) > 1e-9)
@@ -1885,8 +1926,8 @@ with tab4:
                 )
                 section_info = [
                     ("Main bar", f"{design_summary['total_main_bars']} {main_bar}", f"fy = {design_summary['fy_main']:.0f} MPa"),
-                    ("Provided As", f"{design_summary['as_provided_mm2']:,.0f} mm²", f"{design_summary['as_provided_mm2'] / 100.0:,.1f} cm²"),
-                    ("Required As", f"{design_summary['as_req_total_mm2']:,.0f} mm²", f"{design_summary['as_req_total_mm2'] / 100.0:,.1f} cm²"),
+                    ("Provided As", f"{design_summary['as_provided_mm2']:,.0f} mm2", f"{design_summary['as_provided_mm2'] / 100.0:,.1f} cm2"),
+                    ("Required As", f"{design_summary['as_req_total_mm2']:,.0f} mm2", f"{design_summary['as_req_total_mm2'] / 100.0:,.1f} cm2"),
                     ("Tie bar", tie_bar, f"fy = {design_summary['fy_tie']:.0f} MPa"),
                     ("Recommended tie spacing", f"{design_summary['s_rec_mm']:.0f} mm", f"provided = {tie_spacing_mm:.0f} mm"),
                 ]
@@ -1908,10 +1949,10 @@ with tab4:
                 st.markdown(
                     f"""
                     - **Main bar steel:** `{design_summary['total_main_bars']} {main_bar}`
-                    - **Provided main steel:** `{design_summary['as_provided_mm2']:,.0f} mm²`
-                    - **Minimum steel from spring guide:** `{design_summary['as_min_mm2']:,.0f} mm²`
-                    - **Axial steel demand:** `{design_summary['as_req_axial_mm2']:,.0f} mm²`
-                    - **Flexural steel demand:** `{design_summary['as_req_flex_mm2']:,.0f} mm²`
+                    - **Provided main steel:** `{design_summary['as_provided_mm2']:,.0f} mm2`
+                    - **Minimum steel from spring guide:** `{design_summary['as_min_mm2']:,.0f} mm2`
+                    - **Axial steel demand:** `{design_summary['as_req_axial_mm2']:,.0f} mm2`
+                    - **Flexural steel demand:** `{design_summary['as_req_flex_mm2']:,.0f} mm2`
                     - **Effective depth d:** `{design_summary['d_eff_mm']:.0f} mm`
                     - **Concrete shear strength Vc:** `{design_summary['vc_n'] / 1000.0:,.1f} kN`
                     """
@@ -1927,12 +1968,16 @@ with tab4:
 
             fig_axial = go.Figure()
             fig_axial.add_trace(go.Scatter(
-                x=design_profile["Axial P [kN]"], y=design_profile["Depth [m]"],
-                mode="lines+markers", line=dict(color="#2c7fb8", width=2), marker=dict(size=5),
+                x=design_profile["Axial P [kN]"],
+                y=design_profile["Depth [m]"],
+                mode="lines+markers",
+                line=dict(color="#2c7fb8", width=2),
+                marker=dict(size=5),
                 name="P"
             ))
             fig_axial.update_layout(
-                height=420, margin=dict(l=10, r=10, t=40, b=10),
+                height=420,
+                margin=dict(l=10, r=10, t=40, b=10),
                 yaxis=dict(autorange="reversed", title="Depth [m]"),
                 xaxis=dict(title="Axial Compression P [kN]"),
                 title=dict(text="Axial Force Along Pile", font=dict(size=14))
@@ -1941,12 +1986,18 @@ with tab4:
 
             fig_m = go.Figure()
             fig_m.add_trace(go.Scatter(
-                x=design_profile["Moment M [kN-m]"], y=design_profile["Depth [m]"],
-                mode="lines+markers", line=dict(color="#d95f0e", width=2), marker=dict(size=5),
-                fill="tozerox", fillcolor="rgba(217,95,14,0.10)", name="M"
+                x=design_profile["Moment M [kN-m]"],
+                y=design_profile["Depth [m]"],
+                mode="lines+markers",
+                line=dict(color="#d95f0e", width=2),
+                marker=dict(size=5),
+                fill="tozerox",
+                fillcolor="rgba(217,95,14,0.10)",
+                name="M"
             ))
             fig_m.update_layout(
-                height=420, margin=dict(l=10, r=10, t=40, b=10),
+                height=420,
+                margin=dict(l=10, r=10, t=40, b=10),
                 yaxis=dict(autorange="reversed", title="Depth [m]"),
                 xaxis=dict(title="Moment M [kN-m]"),
                 title=dict(text="Bending Moment Along Pile", font=dict(size=14))
@@ -1955,12 +2006,18 @@ with tab4:
 
             fig_v = go.Figure()
             fig_v.add_trace(go.Scatter(
-                x=design_profile["Shear V [kN]"], y=design_profile["Depth [m]"],
-                mode="lines+markers", line=dict(color="#31a354", width=2), marker=dict(size=5),
-                fill="tozerox", fillcolor="rgba(49,163,84,0.10)", name="V"
+                x=design_profile["Shear V [kN]"],
+                y=design_profile["Depth [m]"],
+                mode="lines+markers",
+                line=dict(color="#31a354", width=2),
+                marker=dict(size=5),
+                fill="tozerox",
+                fillcolor="rgba(49,163,84,0.10)",
+                name="V"
             ))
             fig_v.update_layout(
-                height=420, margin=dict(l=10, r=10, t=40, b=10),
+                height=420,
+                margin=dict(l=10, r=10, t=40, b=10),
                 yaxis=dict(autorange="reversed", title="Depth [m]"),
                 xaxis=dict(title="Shear V [kN]"),
                 title=dict(text="Shear Force Along Pile", font=dict(size=14))
@@ -1984,7 +2041,7 @@ with tab4:
             with st.expander("Design assumptions and workflow", expanded=False):
                 st.markdown(
                     """
-                    1. This tab uses the already-calculated lateral spring profile from the main spring analysis.
+                    1. This section uses the already-calculated lateral spring profile from the main spring analysis.
                     2. Axial compression is treated as constant along pile length from the applied `Pu`.
                     3. Shear and moment are obtained from a free-head Winkler beam model using the selected spring source.
                     4. Main bar demand is checked with a simplified axial-plus-flexure estimate and the recommended steel ratio from the spring stiffness guide.
@@ -1992,6 +2049,63 @@ with tab4:
                     6. Final pile design should still be confirmed with project-specific load combinations, interaction checks, detailing rules, and code provisions.
                     """
                 )
+
+        st.divider()
+        st.caption("Legacy spring-based reinforcement guidance is kept below for reference.")
+    st.header("Legacy Spring-Based Reinforcement Guidance")
+    st.markdown("""
+    เธเธฒเธฃเธญเธญเธเนเธเธเน€เธซเธฅเนเธเน€เธชเธฃเธดเธกเน€เธชเธฒเน€เธเนเธก (Longitudinal เนเธฅเธฐ Shear/Links) เธ เธฒเธขเนเธ•เนเนเธฃเธเธ”เนเธฒเธเธเนเธฒเธเธเธฑเนเธ **Spring Stiffness (kh) เธกเธตเธเธฅเนเธ”เธขเธ•เธฃเธ** เนเธ”เธข:
+    - **Shear Force (V):** เธเธถเนเธเธเธฑเธเธเธงเธฒเธกเธเธฑเธเธเธญเธ Bending Moment Diagram เธเธถเนเธเธเธถเนเธเธเธฑเธ **เธเนเธฒ kh เธ”เนเธฒเธเธเธญเธ (Outer Layers)**
+    - **Longitudinal Rebar:** เธ•เนเธญเธเธเธงเธเธเธธเธก Crack Width เธเธถเนเธเธเธถเนเธเธเธฑเธ Service Moment เธ—เธตเนเนเธ”เนเธเธฒเธเธเนเธฒ **kh เธ”เนเธฒเธเนเธ (Inner Layers)**
+    """)
+
+    st.subheader("1. เธเธฒเธฃเน€เธฅเธทเธญเธ Method เธชเธณเธซเธฃเธฑเธเธญเธญเธเนเธเธเน€เธซเธฅเนเธเน€เธชเธฃเธดเธก (Workflow เนเธเธฐเธเธณ)")
+    col_w1, col_w2 = st.columns(2)
+    with col_w1:
+        st.success("""
+        **โ… เนเธเนเธเนเธฒเธเธฒเธ JRA Method เน€เธเนเธเธซเธฅเธฑเธ**
+        **เน€เธซเธ•เธธเธเธฅ:**
+        1. เธเนเธฒ JRA เธญเธขเธนเนเธฃเธฐเธซเธงเนเธฒเธ Conservative (Terzaghi) เนเธฅเธฐ Unconservative (Broms)
+        2. เนเธซเน Moment Envelope เธ—เธตเนเธชเธกเธเธฃเธดเธเธ—เธตเนเธชเธธเธ”เธชเธณเธซเธฃเธฑเธเธ”เธดเธเนเธเนเธ—เธข
+        3. เธ–เธนเธเธ•เธฃเธงเธเธชเธญเธเนเธฅเธฐเธขเธทเธเธขเธฑเธเนเธ”เธข MRTA เนเธฅเธฐ DOH เธชเธณเธซเธฃเธฑเธเธเธฒเธเธเธฃเธดเธ
+        """)
+    with col_w2:
+        st.info("""
+        **โ–๏ธ เนเธเน Terzaghi Cross-check เน€เธเธทเนเธญเธเธงเธฒเธกเธเธฅเธญเธ”เธ เธฑเธข**
+        - เนเธซเนเธเนเธฒ kh เธ•เนเธณ โ’ Moment เธชเธนเธเธเธถเนเธ โ’ เน€เธซเธฅเนเธเน€เธชเธฃเธดเธกเธกเธฒเธเธเธถเนเธ
+        - เธซเธฒเธเธเนเธฒเน€เธซเธฅเนเธเธเธฒเธ JRA เนเธเธฅเนเน€เธเธตเธขเธเธเธฑเธ Min. Rebar (ACI) โ’ เนเธกเนเธเธณเน€เธเนเธเธ•เนเธญเธเนเธเน Terzaghi
+        - เธซเธฒเธเธเนเธฒเน€เธซเธฅเนเธเธเธฒเธ JRA เธ•เนเธณเธกเธฒเธ โ’ เธเธงเธฃเธ•เธฃเธงเธเธชเธญเธเธ”เนเธงเธข Terzaghi เน€เธเธทเนเธญเธเธงเธฒเธกเธเธฅเธญเธ”เธ เธฑเธข
+        """)
+
+    st.divider()
+    st.subheader("2. Minimum Longitudinal Reinforcement (เธญเธดเธเธเธฒเธ Crack Control & ACI)")
+    st.caption("เธชเธณเธซเธฃเธฑเธเน€เธชเธฒเน€เธเนเธกเธ—เธตเนเธ—เธเนเธฃเธเธ”เนเธฒเธเธเนเธฒเธ เธเนเธฒ Min. As เนเธกเนเนเธเนเน€เธเธตเธขเธ 1% เธเธญเธ Ap เธ•เธฒเธก ACI 10.5.1 เนเธ•เนเธเธงเธฃเธเธงเธเธเธธเธกเธเธฒเธ Serviceability (Crack Width)")
+
+    if not _ready or df_results.empty:
+        st.info("โณ เธเธฃเธธเธ“เธฒเธเธฃเธญเธเธเนเธญเธกเธนเธฅเธเธฑเนเธเธ”เธดเธเนเธซเนเธเธฃเธเธเนเธญเธ เธฃเธฐเธเธเธเธฐเนเธชเธ”เธเธเธณเนเธเธฐเธเธณเธ—เธตเนเธเธตเน", icon="๐ชจ")
+    else:
+        st.write(f"**เธชเธ เธฒเธเธ”เธดเธเธเธฒเธ Input:** kh เธ—เธตเนเธเธดเธงเธ”เธดเธ = {kh_max_surface:,.0f} kN/mยณ | kh เธเธฑเนเธเธฅเธถเธ = {kh_min_deep:,.0f} kN/mยณ")
+
+        if kh_max_surface <= 5000:
+            st.warning(f"๐  **Soft Clay / Very Low kh:** เนเธฃเธเธ”เธฑเธเธ”เธดเธเธขเธฑเธเนเธกเนเธชเธฒเธกเธฒเธฃเธ–เธฃเธฑเธเนเธฃเธเธ”เนเธฒเธเธเนเธฒเธเนเธ”เนเธ”เธต เธเธงเธฃเนเธเน As >= **{as_ratio_rec*100:.1f}%** เธเธญเธ Ap เน€เธเธทเนเธญเธเธงเธเธเธธเธกเธฃเธญเธขเธฃเนเธฒเธง")
+        elif kh_max_surface <= 15000:
+            st.success(f"๐ข **Medium Stiff Clay / Low kh:** เนเธเน As >= **{as_ratio_rec*100:.1f}%** เธเธญเธ Ap (เธ•เธฒเธก ACI 10.5.1 เธ—เธฑเนเธงเนเธ)")
+        else:
+            st.success(f"๐”ต **Stiff Clay / Sand (High kh):** เธ”เธดเธเธเนเธงเธขเธฃเธฑเธเนเธฃเธเนเธ”เนเธ”เธต เธชเธฒเธกเธฒเธฃเธ–เนเธเน As >= **{as_ratio_rec*100:.1f}%** เธเธญเธ Ap เนเธ”เน")
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Ap [mยฒ]", f"{Ap:.4f}")
+        c2.metric("Recommended As Ratio", f"{as_ratio_rec*100:.1f}%")
+        c3.metric("Min. As [mยฒ]", f"{As_min:.4f}", help="เธเนเธฒเธเธทเนเธเธ—เธตเนเน€เธซเธฅเนเธเน€เธชเธฃเธดเธกเธเธฑเนเธเธ•เนเธณเธ—เธตเนเนเธเธฐเธเธณเธชเธณเธซเธฃเธฑเธเธญเธญเธเนเธเธ")
+
+    st.divider()
+    st.subheader("3. Shear Reinforcement (Links) Guidance")
+    st.markdown("""
+    เธเธฒเธฃเธซเธฒเธเธฃเธดเธกเธฒเธ“เน€เธซเธฅเนเธเธฅเธนเธเธ•เธฑเนเธ (Shear Links) เธเธถเนเธเธเธฑเธ **Maximum Shear Force (Vu)** เธ—เธตเนเน€เธเธดเธ”เธเธถเนเธเธ เธฒเธขเนเธเน€เธชเธฒเน€เธเนเธก
+    - **Vu เธชเธนเธเธชเธธเธ”เธกเธฑเธเน€เธเธดเธ”เธ—เธตเนเธฃเธฐเธ”เธฑเธเธเธทเนเธเธ”เธดเธ (Ground Level) เธซเธฃเธทเธญเธเนเธงเธ Scour Depth**
+    - เธเนเธฒ Vu เธเธถเนเธเธเธฑเธเธเนเธฒ **kh เธ—เธตเนเธฃเธฐเธ”เธฑเธเธเธดเธงเธ”เธดเธเธเธฑเนเธเธเธญเธเธชเธธเธ”** (เน€เธเธฃเธฒเธฐเธ”เธดเธเธเธฑเนเธเธเธญเธเธเธฐเธชเธฃเนเธฒเธเนเธฃเธเธ•เนเธฒเธเธชเธนเธเธชเธธเธ”เธ•เธญเธเน€เธฃเธดเนเธกเน€เธเธฅเธทเนเธญเธเธ—เธตเน)
+    - **เธซเธฒเธเนเธเน JRA:** เนเธซเนเธ”เธถเธเธเนเธฒ `Ksx` เธ—เธตเน Node เนเธฃเธเน (เธ เธฒเธขเนเธ•เน Scour) เนเธเนเธชเนเนเธเนเธเธฃเนเธเธฃเธก FEA (SAP2000/ETABS) เน€เธเธทเนเธญเธซเธฒ Diagram เธเธญเธ Vu เนเธฅเนเธงเธเนเธญเธขเธญเธญเธเนเธเธ Links เธ•เธฒเธก ACI 318 Chapter 22
+    """)
 
 # โ•โ•โ•โ•โ•โ•โ•โ• TAB 5 โ€” REFERENCE โ•โ•โ•โ•โ•โ•โ•โ•
 with tab5:
@@ -2036,4 +2150,3 @@ with tab6:
     6. **FHWA-NHI-16-009** โ€” *Design and Construction of Driven Pile Foundations*, ยง9.4
     7. **Reese, L.C. & Van Impe, W.F. (2011)** โ€” *Single Piles and Pile Groups Under Lateral Loading*
     """)
-
