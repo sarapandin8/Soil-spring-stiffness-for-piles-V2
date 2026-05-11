@@ -212,6 +212,15 @@ PMULT_TABLE = {
     "3rd Row+": {3.0: 0.30, 4.0: 0.50,  5.0: 0.70, 6.0: 1.00},
 }
 
+REBAR_DB = {
+    "DB12": {"dia_mm": 12, "fy_mpa": 390},
+    "DB16": {"dia_mm": 16, "fy_mpa": 390},
+    "DB20": {"dia_mm": 20, "fy_mpa": 390},
+    "DB25": {"dia_mm": 25, "fy_mpa": 390},
+    "DB28": {"dia_mm": 28, "fy_mpa": 390},
+    "DB32": {"dia_mm": 32, "fy_mpa": 490},
+}
+
 # ─────────────────────────────────────────────
 #  SESSION STATE INIT  (must run BEFORE handlers below)
 # ─────────────────────────────────────────────
@@ -313,6 +322,15 @@ def group_row_position(row_index):
     """Row label used for p-multiplier lookup."""
     return "Lead Row" if row_index == 0 else ("2nd Row" if row_index == 1 else "3rd Row+")
 
+def get_rebar_area_mm2(bar_name):
+    """Nominal reinforcing bar area in mm²."""
+    dia_mm = float(REBAR_DB[bar_name]["dia_mm"])
+    return np.pi * dia_mm**2 / 4.0
+
+def get_rebar_fy_mpa(bar_name):
+    """Yield strength of reinforcing bar in MPa."""
+    return float(REBAR_DB[bar_name]["fy_mpa"])
+
 def calc_pile_props(pile_type, D, B, H, fc):
     """Concrete pile properties. Ep = 4700√fc (MPa) → kN/m²"""
     Ep = 4700 * np.sqrt(fc) * 1000
@@ -329,6 +347,55 @@ def calc_pile_props(pile_type, D, B, H, fc):
         Deq_x = B
         Deq_y = H
     return Ap, Ipx, Ipy, Ep, Deq_x, Deq_y
+
+def solve_pile_lateral_response(depths, spring_k, EI, head_shear=0.0, head_moment=0.0):
+    """Solve a Winkler beam with free head loads and nodal springs."""
+    depths = np.asarray(depths, dtype=float)
+    spring_k = np.asarray(spring_k, dtype=float)
+    n = len(depths)
+    if n == 0:
+        return np.array([]), np.array([]), np.array([]), np.array([]), np.array([])
+    if n == 1 or (abs(head_shear) < 1e-12 and abs(head_moment) < 1e-12):
+        zeros = np.zeros(n, dtype=float)
+        return zeros, zeros, zeros, zeros, zeros
+    if EI <= 0 or np.all(np.abs(spring_k) < 1e-12):
+        raise ValueError("Pile lateral response cannot be solved because EI or spring stiffness is zero.")
+
+    ndof = 2 * n
+    K = np.zeros((ndof, ndof), dtype=float)
+    F = np.zeros(ndof, dtype=float)
+    F[0] = float(head_shear)
+    F[1] = float(head_moment)
+
+    for i in range(n - 1):
+        le = float(depths[i + 1] - depths[i])
+        if le <= 0:
+            raise ValueError("Depth nodes must be strictly increasing for pile response analysis.")
+        ke = EI / le**3 * np.array([
+            [12.0,   6.0 * le, -12.0,   6.0 * le],
+            [6.0*le, 4.0*le**2, -6.0*le, 2.0*le**2],
+            [-12.0, -6.0 * le,  12.0,  -6.0 * le],
+            [6.0*le, 2.0*le**2, -6.0*le, 4.0*le**2],
+        ], dtype=float)
+        idx = [2*i, 2*i + 1, 2*i + 2, 2*i + 3]
+        K[np.ix_(idx, idx)] += ke
+
+    for i, k_val in enumerate(spring_k):
+        K[2*i, 2*i] += max(float(k_val), 0.0)
+
+    u = np.linalg.solve(K, F)
+    y = u[0::2]
+    theta = u[1::2]
+    reactions = spring_k * y
+
+    shear = np.zeros(n, dtype=float)
+    moment = np.zeros(n, dtype=float)
+    for i, z in enumerate(depths):
+        shear[i] = head_shear - reactions[:i+1].sum()
+        arm = z - depths[:i+1]
+        moment[i] = head_moment + head_shear * z - np.sum(reactions[:i+1] * arm)
+
+    return y, theta, reactions, shear, moment
 
 def calc_kv_tip(N_tip, D, Ap, design_stage):
     """Vertical tip spring (JRA) Kv_tip = (E0/B0)(D/B0)^(-3/4)/3 × Ap"""
@@ -629,6 +696,85 @@ def pile_group_plan_figure(pile_type, D, B, H, s_D, nx, ny, use_group):
     )
     return fig
 
+def pile_rebar_section_figure(pile_type, D, B, H, clear_cover_mm, tie_bar, main_bar,
+                              n_round_bars=None, n_b_face=None, n_h_face=None):
+    """Section figure with perimeter reinforcement arrangement."""
+    fig = go.Figure()
+    main_dia_mm = float(REBAR_DB[main_bar]["dia_mm"])
+    tie_dia_mm = float(REBAR_DB[tie_bar]["dia_mm"])
+    cover_m = clear_cover_mm / 1000.0
+    tie_dia_m = tie_dia_mm / 1000.0
+    main_dia_m = main_dia_mm / 1000.0
+    bar_coords = []
+
+    if pile_type == "Round":
+        radius = D / 2.0
+        r_bar = max(radius - cover_m - tie_dia_m - main_dia_m / 2.0, main_dia_m)
+        theta = np.linspace(0, 2*np.pi, 200)
+        fig.add_trace(go.Scatter(
+            x=np.cos(theta) * radius, y=np.sin(theta) * radius,
+            fill='toself', fillcolor='rgba(100,160,220,0.20)',
+            line=dict(color='#1a4f8a', width=2.5), showlegend=False, hoverinfo='skip'
+        ))
+        fig.add_trace(go.Scatter(
+            x=np.cos(theta) * (radius - cover_m - tie_dia_m/2),
+            y=np.sin(theta) * (radius - cover_m - tie_dia_m/2),
+            mode='lines', line=dict(color='#555', width=1.6, dash='dash'),
+            showlegend=False, hoverinfo='skip'
+        ))
+        n_bars = max(int(n_round_bars or 6), 4)
+        for ang in np.linspace(0, 2*np.pi, n_bars, endpoint=False):
+            bar_coords.append((r_bar * np.cos(ang), r_bar * np.sin(ang)))
+        title = f"Pile Design Section - Round ({n_bars} {main_bar})"
+        lim = radius * 1.55
+    else:
+        x0, x1 = -B/2.0, B/2.0
+        y0, y1 = -H/2.0, H/2.0
+        fig.add_trace(go.Scatter(
+            x=[x0, x1, x1, x0, x0], y=[y0, y0, y1, y1, y0],
+            fill='toself', fillcolor='rgba(100,160,220,0.20)',
+            line=dict(color='#1a4f8a', width=2.5), showlegend=False, hoverinfo='skip'
+        ))
+        x_t0 = x0 + cover_m + tie_dia_m/2
+        x_t1 = x1 - cover_m - tie_dia_m/2
+        y_t0 = y0 + cover_m + tie_dia_m/2
+        y_t1 = y1 - cover_m - tie_dia_m/2
+        fig.add_trace(go.Scatter(
+            x=[x_t0, x_t1, x_t1, x_t0, x_t0], y=[y_t0, y_t0, y_t1, y_t1, y_t0],
+            mode='lines', line=dict(color='#555', width=1.6, dash='dash'),
+            showlegend=False, hoverinfo='skip'
+        ))
+
+        nb = max(int(n_b_face or 3), 2)
+        nh = max(int(n_h_face or 3), 2)
+        x_bar = np.linspace(x0 + cover_m + tie_dia_m + main_dia_m/2, x1 - cover_m - tie_dia_m - main_dia_m/2, nb)
+        y_bar = np.linspace(y0 + cover_m + tie_dia_m + main_dia_m/2, y1 - cover_m - tie_dia_m - main_dia_m/2, nh)
+        for x in x_bar:
+            bar_coords.append((x, y_bar[0]))
+            bar_coords.append((x, y_bar[-1]))
+        for y in y_bar[1:-1]:
+            bar_coords.append((x_bar[0], y))
+            bar_coords.append((x_bar[-1], y))
+        title = f"Pile Design Section - Rectangular ({2*(nb+nh)-4} {main_bar})"
+        lim = max(B, H) * 0.95
+
+    if bar_coords:
+        bx, by = zip(*bar_coords)
+        fig.add_trace(go.Scatter(
+            x=bx, y=by, mode='markers',
+            marker=dict(size=max(main_dia_mm * 0.75, 10), color='#c0392b', line=dict(color='white', width=1)),
+            showlegend=False, hoverinfo='skip'
+        ))
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=14, color='#1a4f8a')),
+        xaxis=dict(scaleanchor='y', scaleratio=1, range=[-lim, lim], showgrid=True, gridcolor='rgba(180,180,180,0.25)'),
+        yaxis=dict(range=[-lim, lim], showgrid=True, gridcolor='rgba(180,180,180,0.25)'),
+        height=420, margin=dict(l=10, r=10, t=40, b=10),
+        plot_bgcolor='rgba(245,248,255,0.85)'
+    )
+    return fig
+
 def calculate_rebar_params(df_results, Ap):
     """Calculate rebar design parameters"""
     kh_max_surface = df_results["kh_x [kN/m³]"].iloc[1] if len(df_results) > 1 else 0
@@ -641,6 +787,80 @@ def calculate_rebar_params(df_results, Ap):
         as_ratio_rec = 0.008
     As_min = Ap * as_ratio_rec
     return kh_max_surface, kh_min_deep, as_ratio_rec, As_min
+
+def calc_pile_design_summary(pile_type, D, B, H, fc, cover_mm, main_bar, tie_bar,
+                             direction, Pu_kN, shear_kN, moment_kNm, n_main_bars,
+                             n_b_face, n_h_face, n_tie_legs, as_ratio_rec):
+    """Preliminary RC pile design summary based on axial, moment, and shear demand."""
+    main_dia_mm = float(REBAR_DB[main_bar]["dia_mm"])
+    tie_dia_mm = float(REBAR_DB[tie_bar]["dia_mm"])
+    fy_main = get_rebar_fy_mpa(main_bar)
+    fy_tie = get_rebar_fy_mpa(tie_bar)
+    ag_mm2 = calc_pile_props("Round" if pile_type == "Round" else "Square", D, B, H, fc)[0] * 1e6
+
+    if pile_type == "Round":
+        total_main_bars = max(int(n_main_bars or 6), 4)
+        section_depth_mm = D * 1000.0
+        bw_mm = D * 1000.0
+    else:
+        total_main_bars = max(2 * (int(n_b_face or 3) + int(n_h_face or 3)) - 4, 4)
+        if direction == "X":
+            section_depth_mm = B * 1000.0
+            bw_mm = H * 1000.0
+        else:
+            section_depth_mm = H * 1000.0
+            bw_mm = B * 1000.0
+
+    d_eff_mm = max(section_depth_mm - cover_mm - tie_dia_mm - main_dia_mm / 2.0, section_depth_mm * 0.65)
+    as_bar_mm2 = get_rebar_area_mm2(main_bar)
+    as_provided_mm2 = total_main_bars * as_bar_mm2
+    as_min_mm2 = max(as_ratio_rec * ag_mm2, 0.01 * ag_mm2)
+
+    phi_axial = 0.65
+    pu_n = max(float(Pu_kN), 0.0) * 1000.0
+    axial_rhs = pu_n / phi_axial - 0.85 * fc * ag_mm2
+    axial_den = max(fy_main - 0.85 * fc, 1e-6)
+    as_req_axial_mm2 = max(axial_rhs / axial_den, 0.0)
+
+    phi_flex = 0.90
+    lever_arm_mm = max(0.85 * d_eff_mm, 1e-6)
+    mu_nmm = abs(float(moment_kNm)) * 1e6
+    as_req_flex_mm2 = mu_nmm / max(phi_flex * fy_main * lever_arm_mm, 1e-6)
+    as_req_total_mm2 = max(as_min_mm2, as_req_axial_mm2 + as_req_flex_mm2)
+
+    av_mm2 = max(int(n_tie_legs), 2) * get_rebar_area_mm2(tie_bar)
+    phi_shear = 0.75
+    vu_n = abs(float(shear_kN)) * 1000.0
+    vc_n = 0.17 * np.sqrt(fc) * bw_mm * d_eff_mm
+    if vu_n <= phi_shear * vc_n:
+        s_req_mm = min(d_eff_mm / 2.0, 300.0)
+        shear_status = "Concrete shear capacity is adequate; provide minimum confinement ties."
+    else:
+        vs_req_n = vu_n / phi_shear - vc_n
+        s_req_mm = av_mm2 * fy_tie * d_eff_mm / max(vs_req_n, 1e-6)
+        shear_status = "Transverse reinforcement is required from the preliminary shear check."
+    s_code_max_mm = min(d_eff_mm / 2.0, 300.0)
+    s_rec_mm = max(min(s_req_mm, s_code_max_mm), 75.0)
+
+    return {
+        "total_main_bars": total_main_bars,
+        "d_eff_mm": d_eff_mm,
+        "bw_mm": bw_mm,
+        "fy_main": fy_main,
+        "fy_tie": fy_tie,
+        "as_bar_mm2": as_bar_mm2,
+        "as_provided_mm2": as_provided_mm2,
+        "as_min_mm2": as_min_mm2,
+        "as_req_axial_mm2": as_req_axial_mm2,
+        "as_req_flex_mm2": as_req_flex_mm2,
+        "as_req_total_mm2": as_req_total_mm2,
+        "main_ok": as_provided_mm2 >= as_req_total_mm2,
+        "av_mm2": av_mm2,
+        "vc_n": vc_n,
+        "s_req_mm": s_req_mm,
+        "s_rec_mm": s_rec_mm,
+        "shear_status": shear_status,
+    }
 
 def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
                 node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta,
