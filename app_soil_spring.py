@@ -249,9 +249,10 @@ def calc_kh_jra(N, D, design_stage, soil_type, below_water):
 
 def get_nh_terzaghi(N, below_water):
     """Terzaghi sand nh values in kN/m3/m from Bowles 1997 Table 9-1."""
-    if N < 10:   return 4000  if below_water else 7000
-    elif N < 30: return 12000 if below_water else 21000
-    else:        return 34000 if below_water else 56000
+    if N <= 10:   return 4000  if below_water else 7000
+    elif N <= 30: return 12000 if below_water else 21000
+    elif N <= 50: return 21000 if below_water else 35000
+    else:         return 34000 if below_water else 56000
 
 def calc_kh_terzaghi(N, soil_type, D, z_mid, below_water, cu=None):
     """Terzaghi/Bowles lateral subgrade modulus for sand and clay."""
@@ -793,8 +794,9 @@ def pile_rebar_section_figure(
 
 def calculate_rebar_params(df_results, Ap):
     """Calculate rebar design parameters"""
-    kh_max_surface = df_results["kh_x [kN/m3]"].iloc[1] if len(df_results) > 1 else 0
-    kh_min_deep = df_results["kh_x [kN/m3]"].iloc[-1] if len(df_results) > 0 else 0
+    kh_valid = pd.to_numeric(df_results["kh_x [kN/m3]"], errors="coerce").replace(0, np.nan).dropna()
+    kh_max_surface = float(kh_valid.iloc[0]) if not kh_valid.empty else 0.0
+    kh_min_deep = float(kh_valid.iloc[-1]) if not kh_valid.empty else 0.0
     if kh_max_surface <= 5000:
         as_ratio_rec = 0.015
     elif kh_max_surface <= 15000:
@@ -881,7 +883,7 @@ def calc_pile_design_summary(
     }
 
 def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
-                node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta,
+                node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta, beta_x, beta_y,
                 kh_max_surface, kh_min_deep, as_ratio_rec, As_min, use_group, spring_output):
     """Build Excel file with all calculation results."""
     try:
@@ -969,7 +971,8 @@ def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx,
             ("p-multiplier", Pmult, "-"),
             ("Spring Output", spring_output, "-"),
             ("Excel Export", "Global average + row-based sheets", "-"),
-            ("Beta characteristic value [1/m]", round(beta, 4), "1/m"),
+            ("Beta X characteristic value [1/m]", round(beta_x, 4), "1/m"),
+            ("Beta Y characteristic value [1/m]", round(beta_y, 4), "1/m"),
             ("Kv_tip [kN/m]", round(Kv_tip, 1), "kN/m"),
         ]
         for ri, (k, v, u) in enumerate(summary):
@@ -1282,7 +1285,8 @@ if not _ready:
     df_results = pd.DataFrame()
     df_row_results = pd.DataFrame()
     N_tip = 0.0; Kv_tip = 0.0; kv_tip = 0.0
-    beta  = 0.0; kh_avg = 0.0
+    beta = beta_x = beta_y = 0.0
+    kh_avg = kh_avg_x = kh_avg_y = 0.0
     kh_max_surface = kh_min_deep = as_ratio_rec = As_min = 0.0
 else:
     _req = ["Depth_From", "Depth_To", "Soil_Type", "SPT_N"]
@@ -1358,6 +1362,7 @@ else:
                     "fm":           round(float(fm), 3),
                     "Soil_Type":    soil_type,
                     "N-SPT":        N_val,
+                    "kh [kN/m3]":   round(kh_x, 1),
                     "Deq [m]":      round(Deq_x, 3),
                     "Kspring [kN/m]": round(kh_x * Deq_x * trib_len * float(fm), 1),
                 })
@@ -1372,6 +1377,7 @@ else:
                     "fm":           round(float(fm), 3),
                     "Soil_Type":    soil_type,
                     "N-SPT":        N_val,
+                    "kh [kN/m3]":   round(kh_y, 1),
                     "Deq [m]":      round(Deq_y, 3),
                     "Kspring [kN/m]": round(kh_y * Deq_y * trib_len * float(fm), 1),
                 })
@@ -1389,12 +1395,18 @@ else:
     N_tip          = float(tip_layer["SPT_N"])
     Kv_tip, kv_tip = calc_kv_tip(N_tip, max(Deq_x, Deq_y), Ap, design_stage)
 
-    Ip_for_beta = Ipy if not pile_is_round else Ipx
-    kh_avg = df_results["kh_x [kN/m3]"].replace(0, np.nan).mean()
-    if pd.isna(kh_avg) or kh_avg <= 0 or Ep * Ip_for_beta <= 0:
-        beta = 0.0
-    else:
-        beta = (kh_avg * Deq_x / (4 * Ep * Ip_for_beta))**0.25
+    kh_avg_x = df_results["kh_x [kN/m3]"].replace(0, np.nan).mean()
+    kh_avg_y = df_results["kh_y [kN/m3]"].replace(0, np.nan).mean()
+
+    def _calc_beta(kh_avg_dir, Deq_dir, Ip_dir):
+        if pd.isna(kh_avg_dir) or kh_avg_dir <= 0 or Ep * Ip_dir <= 0:
+            return 0.0
+        return (kh_avg_dir * Deq_dir / (4 * Ep * Ip_dir))**0.25
+
+    beta_x = _calc_beta(kh_avg_x, Deq_x, Ipy)
+    beta_y = _calc_beta(kh_avg_y, Deq_y, Ipx)
+    beta = beta_x
+    kh_avg = kh_avg_x
 
     kh_max_surface, kh_min_deep, as_ratio_rec, As_min = calculate_rebar_params(df_results, Ap)
 
@@ -1403,7 +1415,7 @@ if _ready:
     try:
         excel_data = build_excel(
             df_results, df_row_results, df_soil_draw, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
-            node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta,
+            node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta, beta_x, beta_y,
             kh_max_surface, kh_min_deep, as_ratio_rec, As_min, use_group, spring_output
         )
         st.sidebar.download_button(
@@ -1470,15 +1482,16 @@ if uploaded_file is not None:
 st.sidebar.markdown("---")
 st.sidebar.caption(f"App Version {VERSION}")
 with tab2:
-    mc = st.columns(5)
+    mc = st.columns(6)
     mc[0].metric("Method", method)
-    mc[1].metric("Beta [1/m]", f"{beta:.3f}" if (_ready and beta > 0) else "-")
-    mc[2].metric("Kv_tip [kN/m]", f"{Kv_tip:,.0f}" if _ready else "-")
+    mc[1].metric("Beta X [1/m]", f"{beta_x:.3f}" if (_ready and beta_x > 0) else "-")
+    mc[2].metric("Beta Y [1/m]", f"{beta_y:.3f}" if (_ready and beta_y > 0) else "-")
+    mc[3].metric("Kv_tip [kN/m]", f"{Kv_tip:,.0f}" if _ready else "-")
     if use_group and spring_output == "Row-based spring table":
-        mc[3].metric("p-mult", "Row-based")
+        mc[4].metric("p-mult", "Row-based")
     else:
-        mc[3].metric("Avg p-mult", f"{Pmult:.3f}")
-    mc[4].metric("Nodes", len(depths) if _ready else "-")
+        mc[4].metric("Avg p-mult", f"{Pmult:.3f}")
+    mc[5].metric("Nodes", len(depths) if _ready else "-")
     st.divider()
 
     r_left, r_right = st.columns([2, 3], gap="medium")
@@ -1609,13 +1622,32 @@ with tab3:
             st.plotly_chart(fig_ks, use_container_width=True)
 
         st.subheader("Beta - Relative Stiffness")
-        if beta > 0:
-            st.info(
-                f"Beta = (kh*D / 4EpIp)^0.25 = **{beta:.4f} 1/m** | "
-                f"1/Beta = **{1/beta:.2f} m** (characteristic length) | "
-                f"Leff = 4/Beta = **{4/beta:.2f} m** | "
-                f"{'Long pile (L > 4/Beta)' if L > 4/beta else 'Short pile (L < 4/Beta)'}"
-            )
+        beta_rows = []
+        for label, beta_val, kh_avg_dir, Deq_dir, Ip_dir in [
+            ("X", beta_x, kh_avg_x, Deq_x, Ipy),
+            ("Y", beta_y, kh_avg_y, Deq_y, Ipx),
+        ]:
+            if beta_val > 0:
+                beta_rows.append({
+                    "Direction": label,
+                    "kh_avg [kN/m3]": kh_avg_dir,
+                    "Deq [m]": Deq_dir,
+                    "Ip used [m4]": Ip_dir,
+                    "Beta [1/m]": beta_val,
+                    "1/Beta [m]": 1 / beta_val,
+                    "4/Beta [m]": 4 / beta_val,
+                    "Pile Type": "Long" if L > 4 / beta_val else "Short",
+                })
+        if beta_rows:
+            st.dataframe(pd.DataFrame(beta_rows).style.format({
+                "kh_avg [kN/m3]": "{:,.0f}",
+                "Deq [m]": "{:.3f}",
+                "Ip used [m4]": "{:.6f}",
+                "Beta [1/m]": "{:.4f}",
+                "1/Beta [m]": "{:.2f}",
+                "4/Beta [m]": "{:.2f}",
+            }), use_container_width=True, hide_index=True)
+            st.caption("Beta X uses kh_x, Deq_x, and Iy. Beta Y uses kh_y, Deq_y, and Ix.")
         else:
             st.warning("Beta cannot be computed because average kh is zero. Check scour depth and soil profile.")
 
@@ -1961,7 +1993,8 @@ with tab6:
     st.markdown(r"""
 ### Convention Notes
 - **Loading width convention:** X-loading uses $D_x = B$, Y-loading uses $D_y = H$ in a JRA-style width convention.
-- **For X-direction loading:** the pile bends about the Y-axis, so $I_p = I_y$ is used in Beta and Vesic checks.
+- **Beta direction convention:** $Beta_X$ uses $k_{h,x}$, $D_x$, and $I_y$; $Beta_Y$ uses $k_{h,y}$, $D_y$, and $I_x$.
+- **For X-direction loading:** the pile bends about the Y-axis, so $I_p = I_y$ is used in Vesic and response checks.
 - **Global Average spring:** uses average group p-multiplier $P_{mult}$ for $K_{sx}$ and $K_{sy}$.
 - **Row-based spring table:** uses row-specific $f_m$ for each loading direction and row number; $K_{spring}=k_h \cdot D_{eq} \cdot L_{trib} \cdot f_m$.
 - **Sand below water table:** JRA applies $E_0 \times 0.6$; Vesic applies $E_s \times 0.6$.
