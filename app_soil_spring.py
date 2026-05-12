@@ -209,6 +209,9 @@ REBAR_DB = {
     "DB32": {"dia_mm": 32, "fy_mpa": 490},
 }
 
+ACI_MIN_LONG_RATIO = 0.01
+ACI_MAX_LONG_RATIO = 0.08
+
 #  SESSION STATE INIT  (must run BEFORE handlers below)
 if 'version' not in st.session_state or st.session_state.version < VERSION:
     st.session_state.clear()
@@ -248,7 +251,7 @@ def calc_kh_jra(N, D, design_stage, soil_type, below_water):
     return kh, E0
 
 def get_nh_terzaghi(N, below_water):
-    """Terzaghi sand nh values in kN/m3/m from Bowles 1997 Table 9-1."""
+    """Rounded Bowles/Terzaghi sand nh design values in kN/m3/m."""
     if N <= 10:   return 4000  if below_water else 7000
     elif N <= 30: return 12000 if below_water else 21000
     elif N <= 50: return 21000 if below_water else 35000
@@ -384,6 +387,12 @@ def calc_kv_tip(N_tip, D, Ap, design_stage):
     kv = (E0 / B0) * (D / B0)**(-0.75) / 3.0
     Kv_tip = kv * Ap
     return Kv_tip, kv
+
+def equivalent_circular_diameter_from_area(Ap):
+    """Equivalent circular diameter for non-round pile area used in JRA-style size effects."""
+    if Ap <= 0:
+        return 0.0
+    return float(np.sqrt(4.0 * Ap / np.pi))
 
 def calc_tributary_lengths(depths, L):
     """Tributary pile length represented by each lateral spring node."""
@@ -1048,8 +1057,13 @@ def uniaxial_interaction_curve(pmm_df, axis):
         "phiM [kN-m]": selected[m_col].abs(),
     }).dropna()
 
-def moment_capacity_at_p(curve_df, pu_kN):
-    """Interpolate factored uniaxial moment capacity at a factored axial demand."""
+def moment_capacity_at_p(curve_df, pu_kN, clamp_tol_ratio=0.002):
+    """Interpolate factored uniaxial moment capacity at a factored axial demand.
+
+    Small round-off excursions are clamped to the curve limits. A demand that
+    is materially outside the P range returns zero capacity so the design is
+    flagged as not adequate instead of being silently extrapolated.
+    """
     if curve_df.empty:
         return 0.0
     curve = curve_df.copy()
@@ -1060,7 +1074,20 @@ def moment_capacity_at_p(curve_df, pu_kN):
     grouped = grouped.sort_values("phiPn [kN]")
     p_vals = grouped["phiPn [kN]"].to_numpy(dtype=float)
     m_vals = grouped["phiM [kN-m]"].to_numpy(dtype=float)
-    if pu_kN < p_vals.min() or pu_kN > p_vals.max():
+    p_min = float(p_vals.min())
+    p_max = float(p_vals.max())
+    tol = max((p_max - p_min) * float(clamp_tol_ratio), 1e-6)
+    if pu_kN < p_min:
+        if pu_kN >= p_min - tol:
+            pu_kN = p_min
+        else:
+            return 0.0
+    elif pu_kN > p_max:
+        if pu_kN <= p_max + tol:
+            pu_kN = p_max
+        else:
+            return 0.0
+    if pu_kN < p_min or pu_kN > p_max:
         return 0.0
     return float(np.interp(pu_kN, p_vals, m_vals))
 
@@ -1244,11 +1271,12 @@ def calculate_rebar_params(df_results, Ap):
     kh_max_surface = float(kh_valid.iloc[0]) if not kh_valid.empty else 0.0
     kh_min_deep = float(kh_valid.iloc[-1]) if not kh_valid.empty else 0.0
     if kh_max_surface <= 5000:
-        as_ratio_rec = 0.015
+        heuristic_ratio = 0.015
     elif kh_max_surface <= 15000:
-        as_ratio_rec = 0.010
+        heuristic_ratio = 0.010
     else:
-        as_ratio_rec = 0.008
+        heuristic_ratio = 0.008
+    as_ratio_rec = max(heuristic_ratio, ACI_MIN_LONG_RATIO)
     As_min = Ap * as_ratio_rec
     return kh_max_surface, kh_min_deep, as_ratio_rec, As_min
 
@@ -1280,7 +1308,7 @@ def calc_pile_design_summary(
     d_eff_mm = max(section_depth_mm - cover_mm - tie_dia_mm - main_dia_mm / 2.0, section_depth_mm * 0.65)
     as_bar_mm2 = get_rebar_area_mm2(main_bar)
     as_provided_mm2 = total_main_bars * as_bar_mm2
-    as_min_mm2 = max(as_ratio_rec * ag_mm2, 0.01 * ag_mm2)
+    as_min_mm2 = max(as_ratio_rec * ag_mm2, ACI_MIN_LONG_RATIO * ag_mm2)
 
     phi_axial = 0.65
     pu_n = max(float(Pu_kN), 0.0) * 1000.0
@@ -1328,7 +1356,7 @@ def calc_pile_design_summary(
         "shear_status": shear_status,
     }
 
-def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
+def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, D_tip_eq, Ap, Ep, Ipx, Ipy, B, H, L, fc,
                 node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta, beta_x, beta_y,
                 kh_max_surface, kh_min_deep, as_ratio_rec, As_min, use_group, spring_output):
     """Build Excel file with all calculation results."""
@@ -1389,6 +1417,7 @@ def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx,
             ("Parameter", "Value", "Unit"),
             ("N-SPT at pile tip", N_tip, "blow/30cm"),
             ("E0 at tip", (2800 if design_stage == "Normal" else 5600) * N_tip, "kN/m2"),
+            ("Equivalent circular D for JRA size effect", D_tip_eq, "m"),
             ("Pile tip area Ap", Ap, "m2"),
             ("Kv_tip vertical spring", round(Kv_tip, 1), "kN/m"),
             ("Design Stage", design_stage, "-"),
@@ -1437,9 +1466,9 @@ def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx,
             ("Parameter", "Value", "Remark / Reference"),
             ("Surface kh_x [kN/m3]", round(kh_max_surface, 1), "Used to evaluate soil stiffness condition"),
             ("Deep kh_x [kN/m3]", round(kh_min_deep, 1), "Stiffness at pile tip layer"),
-            ("Recommended As Ratio", f"{as_ratio_rec*100:.1f}%", "Based on crack control / ACI 318"),
+            ("Recommended As Ratio", f"{as_ratio_rec*100:.1f}%", "Preliminary heuristic, not less than ACI 318 10.6.1.1 minimum"),
             ("Minimum As [m2]", round(As_min, 4), "As = Ap x Ratio"),
-            ("Minimum Rebar Requirement", "See ACI 10.5.1 & 21.6", "Use the governing code and detailing requirement"),
+            ("ACI longitudinal steel limits", "1.0% to 8.0% Ag", "ACI 318-19 10.6.1.1 for nonprestressed columns"),
         ]
         for ri, row in enumerate(rebar_data):
             for ci, val in enumerate(row):
@@ -1553,6 +1582,7 @@ if use_group:
         st.sidebar.info(
             f"**Average fm = {Pmult:.3f}** (used for the global average table)\n\n"
             f"nx={int(nx)}, ny={int(ny)}, n={n_total} piles\n\n"
+            f"Global average uses `min(fm_x, fm_y)` at each pile before averaging.\n\n"
             f"Ref: FHWA-NHI-16-009 Section 9.4"
         )
         with st.sidebar.expander("fm breakdown per row"):
@@ -1776,6 +1806,7 @@ if not _ready:
     df_results = pd.DataFrame()
     df_row_results = pd.DataFrame()
     N_tip = 0.0; Kv_tip = 0.0; kv_tip = 0.0
+    D_tip_eq = D if pile_is_round else equivalent_circular_diameter_from_area(Ap)
     beta = beta_x = beta_y = 0.0
     kh_avg = kh_avg_x = kh_avg_y = 0.0
     kh_max_surface = kh_min_deep = as_ratio_rec = As_min = 0.0
@@ -1884,7 +1915,8 @@ else:
     tip_mask = (df_soil_calc["Depth_From"] <= L) & (df_soil_calc["Depth_To"] > L)
     tip_layer = df_soil_calc[tip_mask].iloc[0] if tip_mask.any() else df_soil_calc.iloc[-1]
     N_tip          = float(tip_layer["SPT_N"])
-    Kv_tip, kv_tip = calc_kv_tip(N_tip, max(Deq_x, Deq_y), Ap, design_stage)
+    D_tip_eq = D if pile_is_round else equivalent_circular_diameter_from_area(Ap)
+    Kv_tip, kv_tip = calc_kv_tip(N_tip, D_tip_eq, Ap, design_stage)
 
     kh_avg_x = df_results["kh_x [kN/m3]"].replace(0, np.nan).mean()
     kh_avg_y = df_results["kh_y [kN/m3]"].replace(0, np.nan).mean()
@@ -1905,7 +1937,7 @@ st.sidebar.header("5. Export")
 if _ready:
     try:
         excel_data = build_excel(
-            df_results, df_row_results, df_soil_draw, N_tip, Kv_tip, Ap, Ep, Ipx, Ipy, B, H, L, fc,
+            df_results, df_row_results, df_soil_draw, N_tip, Kv_tip, D_tip_eq, Ap, Ep, Ipx, Ipy, B, H, L, fc,
             node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta, beta_x, beta_y,
             kh_max_surface, kh_min_deep, as_ratio_rec, As_min, use_group, spring_output
         )
@@ -2450,16 +2482,20 @@ with tab4:
 
                     ag_mm2 = Ap * 1e6
                     as_total_mm2 = float(bar_df["As_mm2"].sum())
-                    rho_prov = as_total_mm2 / max(ag_mm2, 1e-9)
-                    rho_min_temp = 0.002
-                    as_min_temp_mm2 = rho_min_temp * ag_mm2
-                    min_ok = as_total_mm2 >= as_min_temp_mm2
+                    rho_total = as_total_mm2 / max(ag_mm2, 1e-9)
+                    rho_min_aci = ACI_MIN_LONG_RATIO
+                    rho_max_aci = ACI_MAX_LONG_RATIO
+                    as_min_aci_mm2 = rho_min_aci * ag_mm2
+                    as_max_aci_mm2 = rho_max_aci * ag_mm2
+                    min_ok = as_total_mm2 >= as_min_aci_mm2
+                    max_ok = as_total_mm2 <= as_max_aci_mm2
+                    aci_ratio_ok = min_ok and max_ok
                     if pile_type == "Round":
                         face_note = "Round pile: face-by-face rectangular distribution check is not applicable."
                     else:
                         as_b_face = int(n_b_face) * get_rebar_area_mm2(main_bar)
                         as_h_face = int(n_h_face) * get_rebar_area_mm2(main_bar)
-                        face_req = as_min_temp_mm2 / 2.0
+                        face_req = as_min_aci_mm2 / 2.0
                         face_note = (
                             f"Required each main face = {face_req:,.0f} mm2; "
                             f"B faces = {as_b_face:,.0f} mm2 ({'OK' if as_b_face >= face_req else 'NG'}), "
@@ -2471,10 +2507,10 @@ with tab4:
                         <div style="border:1px solid #c8d5e6;border-radius:6px;padding:12px 14px;background:#f8fbff;margin-bottom:10px">
                             <div style="font-weight:700;margin-bottom:6px">Minimum Reinforcement Check</div>
                             <div style="font-size:13px;line-height:1.55">
-                                Shrinkage/temperature distributed reinforcement only. Column longitudinal minimum should be checked separately.<br>
-                                Required rho = {rho_min_temp*100:.3f}%<br>
-                                As,min total = {as_min_temp_mm2:,.0f} mm2, As provided total = {as_total_mm2:,.0f} mm2
-                                <b style="color:{'#087f23' if min_ok else '#c4123f'}">({'OK' if min_ok else 'NG'})</b><br>
+                                ACI 318-19 10.6.1.1 longitudinal minimum for nonprestressed compression members.<br>
+                                Required rho range = {rho_min_aci*100:.3f}% to {rho_max_aci*100:.1f}%; provided rho = {rho_total*100:.3f}%<br>
+                                As,min total = {as_min_aci_mm2:,.0f} mm2, As provided total = {as_total_mm2:,.0f} mm2
+                                <b style="color:{'#087f23' if aci_ratio_ok else '#c4123f'}">({'OK' if aci_ratio_ok else 'NG'})</b><br>
                                 {face_note}
                             </div>
                         </div>
@@ -2760,8 +2796,11 @@ with tab6:
 - **Loading width convention:** X-loading uses $D_x = B$, Y-loading uses $D_y = H$ in a JRA-style width convention.
 - **Beta direction convention:** $Beta_X$ uses $k_{h,x}$, $D_x$, and $I_y$; $Beta_Y$ uses $k_{h,y}$, $D_y$, and $I_x$.
 - **For X-direction loading:** the pile bends about the Y-axis, so $I_p = I_y$ is used in Vesic and response checks.
-- **Global Average spring:** uses average group p-multiplier $P_{mult}$ for $K_{sx}$ and $K_{sy}$.
+- **Global Average spring:** uses average group p-multiplier $P_{mult}$ for $K_{sx}$ and $K_{sy}$; the average is conservatively based on $\min(f_{m,x}, f_{m,y})$ at each pile.
 - **Row-based spring table:** uses row-specific $f_m$ for each loading direction and row number; $K_{spring}=k_h \cdot D_{eq} \cdot L_{trib} \cdot f_m$.
+- **Vertical tip spring for rectangular piles:** the JRA size-effect diameter is taken as the equivalent circular diameter $D_{eq,c}=\sqrt{4A_p/\pi}$.
+- **Pile Design reinforcement guide:** recommended main steel ratio is a preliminary heuristic but is not allowed below the ACI 318-19 10.6.1.1 minimum of $0.01A_g$ for nonprestressed compression members.
+- **Terzaghi sand $n_h$ values:** the app uses rounded Bowles/Terzaghi design values; confirm project-specific references if exact table values are required.
 - **Sand below water table:** JRA applies $E_0 \times 0.6$; Vesic applies $E_s \times 0.6$.
 
 ### References
