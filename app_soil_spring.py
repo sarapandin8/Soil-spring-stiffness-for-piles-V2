@@ -1165,6 +1165,107 @@ def pmm_slice_at_p(pmm_df, pu_kN):
         slice_df = pd.concat([slice_df, slice_df.iloc[[0]]], ignore_index=True)
     return slice_df
 
+def pmm_slice_radial_capacity(slice_df, theta_rad):
+    """Return radial M capacity on a constant-Pu Mx-My slice at a demand angle."""
+    if slice_df is None or slice_df.empty:
+        return 0.0
+
+    x_vals = slice_df["phiMnx [kN-m]"].to_numpy(dtype=float)
+    y_vals = slice_df["phiMny [kN-m]"].to_numpy(dtype=float)
+    radii = np.hypot(x_vals, y_vals)
+    angles = np.mod(np.arctan2(y_vals, x_vals), 2.0 * np.pi)
+    valid = np.isfinite(radii) & np.isfinite(angles) & (radii > 1e-9)
+    if valid.sum() < 4:
+        return 0.0
+
+    polar = pd.DataFrame({
+        "angle": angles[valid],
+        "radius": radii[valid],
+    })
+    polar["angle_key"] = polar["angle"].round(6)
+    polar = (
+        polar.groupby("angle_key", as_index=False)
+        .agg({"angle": "mean", "radius": "max"})
+        .sort_values("angle")
+    )
+    if len(polar) < 4:
+        return 0.0
+
+    angle_vals = polar["angle"].to_numpy(dtype=float)
+    radius_vals = polar["radius"].to_numpy(dtype=float)
+    angle_ext = np.concatenate([angle_vals[-1:] - 2.0 * np.pi, angle_vals, angle_vals[:1] + 2.0 * np.pi])
+    radius_ext = np.concatenate([radius_vals[-1:], radius_vals, radius_vals[:1]])
+    theta = float(np.mod(theta_rad, 2.0 * np.pi))
+    return float(np.interp(theta, angle_ext, radius_ext))
+
+def pmm_surface_radial_utilization(pmm_df, pu_kN, mux_kNm, muy_kNm, clamp_tol_ratio=0.002):
+    """Check biaxial PMM demand by radial interpolation on the 3D PMM surface."""
+    finite = pmm_df.dropna(subset=["Angle [deg]"]).copy()
+    finite = finite[
+        np.isfinite(finite["phiMnx [kN-m]"])
+        & np.isfinite(finite["phiMny [kN-m]"])
+        & np.isfinite(finite["phiPn [kN]"])
+    ]
+    if finite.empty:
+        return {
+            "utilization": np.inf,
+            "capacity_m": 0.0,
+            "capacity_mux": 0.0,
+            "capacity_muy": 0.0,
+            "pu_used": float(pu_kN),
+            "status": "No PMM surface",
+        }
+
+    p_min = float(finite["phiPn [kN]"].min())
+    p_max = float(finite["phiPn [kN]"].max())
+    tol = max((p_max - p_min) * float(clamp_tol_ratio), 1e-6)
+    pu_use = float(pu_kN)
+    if pu_use < p_min:
+        if pu_use >= p_min - tol:
+            pu_use = p_min
+        else:
+            return {
+                "utilization": np.inf,
+                "capacity_m": 0.0,
+                "capacity_mux": 0.0,
+                "capacity_muy": 0.0,
+                "pu_used": pu_use,
+                "status": "Pu below PMM range",
+            }
+    elif pu_use > p_max:
+        if pu_use <= p_max + tol:
+            pu_use = p_max
+        else:
+            return {
+                "utilization": np.inf,
+                "capacity_m": 0.0,
+                "capacity_mux": 0.0,
+                "capacity_muy": 0.0,
+                "pu_used": pu_use,
+                "status": "Pu above PMM range",
+            }
+
+    demand_m = float(np.hypot(mux_kNm, muy_kNm))
+    theta = float(np.arctan2(muy_kNm, mux_kNm)) if demand_m > 1e-9 else 0.0
+    slice_df = pmm_slice_at_p(finite, pu_use)
+    capacity_m = pmm_slice_radial_capacity(slice_df, theta)
+
+    if demand_m <= 1e-9:
+        utilization = 0.0
+    elif capacity_m <= 1e-9:
+        utilization = np.inf
+    else:
+        utilization = demand_m / capacity_m
+
+    return {
+        "utilization": float(utilization),
+        "capacity_m": float(capacity_m),
+        "capacity_mux": float(capacity_m * np.cos(theta)),
+        "capacity_muy": float(capacity_m * np.sin(theta)),
+        "pu_used": float(pu_use),
+        "status": "OK" if utilization <= 1.0 else "NG",
+    }
+
 def pmm_surface_grid(pmm_df, n_levels=28):
     """Build PMM surface matrices by stacking constant-Pu interaction slices."""
     finite = pmm_df.dropna(subset=["Angle [deg]"]).copy()
@@ -2339,15 +2440,27 @@ with tab4:
 
                     mcap_x = moment_capacity_at_p(mx_curve, pu_kN)
                     mcap_y = moment_capacity_at_p(my_curve, pu_kN)
-                    util_profile = (
+                    linear_util_profile = (
                         np.abs(moment_x) / max(mcap_x, 1e-9)
                         + np.abs(moment_y) / max(mcap_y, 1e-9)
                     )
+                    linear_util_profile = np.where(np.isfinite(linear_util_profile), linear_util_profile, np.inf)
+                    pmm_checks = [
+                        pmm_surface_radial_utilization(pmm_df, pu_kN, mx, my)
+                        for mx, my in zip(moment_x, moment_y)
+                    ]
+                    util_profile = np.asarray([chk["utilization"] for chk in pmm_checks], dtype=float)
                     util_profile = np.where(np.isfinite(util_profile), util_profile, np.inf)
                     imx = int(np.argmax(np.abs(moment_x))) if len(moment_x) else 0
                     imy = int(np.argmax(np.abs(moment_y))) if len(moment_y) else 0
                     iv = int(np.argmax(np.abs(shear_resultant))) if len(shear_resultant) else 0
                     iu = int(np.argmax(util_profile)) if len(util_profile) else 0
+                    governing_pmm = pmm_checks[iu] if pmm_checks else {
+                        "capacity_m": 0.0,
+                        "capacity_mux": 0.0,
+                        "capacity_muy": 0.0,
+                        "status": "No PMM check",
+                    }
                     summary_rows.append({
                         "Load Case": lc,
                         "Max Pu [kN]": float(np.max(axial)),
@@ -2359,7 +2472,15 @@ with tab4:
                         "Max |V| [kN]": float(np.max(np.abs(shear_resultant))),
                         "z @ V [m]": float(depths[iv]),
                         "PMM Util.": float(np.max(util_profile)),
+                        "Linear PMM Util.": float(np.max(linear_util_profile)),
                         "z @ PMM [m]": float(depths[iu]),
+                        "PMM Mux [kN-m]": float(moment_x[iu]) if len(moment_x) else 0.0,
+                        "PMM Muy [kN-m]": float(moment_y[iu]) if len(moment_y) else 0.0,
+                        "PMM M resultant [kN-m]": float(moment_resultant[iu]) if len(moment_resultant) else 0.0,
+                        "PMM radial cap [kN-m]": float(governing_pmm["capacity_m"]),
+                        "PMM cap Mux [kN-m]": float(governing_pmm["capacity_mux"]),
+                        "PMM cap Muy [kN-m]": float(governing_pmm["capacity_muy"]),
+                        "PMM Status": governing_pmm["status"],
                         "Mx cap @ Pu [kN-m]": mcap_x,
                         "My cap @ Pu [kN-m]": mcap_y,
                     })
@@ -2429,7 +2550,14 @@ with tab4:
                                 "Max |V| [kN]": "{:,.1f}",
                                 "z @ V [m]": "{:.2f}",
                                 "PMM Util.": "{:.3f}",
+                                "Linear PMM Util.": "{:.3f}",
                                 "z @ PMM [m]": "{:.2f}",
+                                "PMM Mux [kN-m]": "{:,.1f}",
+                                "PMM Muy [kN-m]": "{:,.1f}",
+                                "PMM M resultant [kN-m]": "{:,.1f}",
+                                "PMM radial cap [kN-m]": "{:,.1f}",
+                                "PMM cap Mux [kN-m]": "{:,.1f}",
+                                "PMM cap Muy [kN-m]": "{:,.1f}",
                                 "Mx cap @ Pu [kN-m]": "{:,.1f}",
                                 "My cap @ Pu [kN-m]": "{:,.1f}",
                             }),
@@ -2442,7 +2570,7 @@ with tab4:
                             - **Provided main steel:** `{bar_df['As_mm2'].sum():,.0f} mm2`
                             - **Maximum shear resultant:** `{overall_v:,.1f} kN`
                             - **Recommended tie spacing:** `{shear_summary['s_rec_mm']:.0f} mm`
-                            - **PMM check:** linear biaxial load-contour utilization using ACI-style uniaxial strain-compatible curves.
+                            - **PMM check:** 3D surface radial utilization from the ACI-style strain-compatible PMM surface.
                             """
                         )
 
@@ -2577,8 +2705,8 @@ with tab4:
                     slice_row = demand_df[demand_df["Load Case"] == slice_case].iloc[0]
                     slice_pu = float(slice_row["Max Pu [kN]"])
                     slice_df = pmm_slice_at_p(pmm_df, slice_pu)
-                    demand_mx = float(slice_row["Max |Mux| [kN-m]"])
-                    demand_my = float(slice_row["Max |Muy| [kN-m]"])
+                    demand_mx = float(slice_row["PMM Mux [kN-m]"])
+                    demand_my = float(slice_row["PMM Muy [kN-m]"])
 
                     fig_slice = go.Figure()
                     if not slice_df.empty:
@@ -2665,8 +2793,8 @@ with tab4:
                             for u in demand_df["PMM Util."]
                         ]
                         fig_pmm.add_trace(go.Scatter3d(
-                            x=demand_df["Max |Mux| [kN-m]"],
-                            y=demand_df["Max |Muy| [kN-m]"],
+                            x=demand_df["PMM Mux [kN-m]"],
+                            y=demand_df["PMM Muy [kN-m]"],
                             z=demand_df["Max Pu [kN]"],
                             mode="markers+text",
                             marker=dict(
@@ -2678,8 +2806,8 @@ with tab4:
                             textposition="top center",
                             customdata=np.stack([
                                 demand_df["PMM Util."].to_numpy(dtype=float),
-                                demand_df["Max |Mux| [kN-m]"].to_numpy(dtype=float),
-                                demand_df["Max |Muy| [kN-m]"].to_numpy(dtype=float),
+                                demand_df["PMM Mux [kN-m]"].to_numpy(dtype=float),
+                                demand_df["PMM Muy [kN-m]"].to_numpy(dtype=float),
                                 demand_df["Max Pu [kN]"].to_numpy(dtype=float),
                             ], axis=-1),
                             hovertemplate=(
@@ -2729,8 +2857,8 @@ with tab4:
                                     st.markdown(f"U = :{status_color}[**{util:.3f} ({status})**]")
                                     st.caption(
                                         f"Pu = {float(row['Max Pu [kN]']):,.1f} kN  \n"
-                                        f"Mux = {float(row['Max |Mux| [kN-m]']):,.1f} kN-m  \n"
-                                        f"Muy = {float(row['Max |Muy| [kN-m]']):,.1f} kN-m"
+                                        f"Mux = {float(row['PMM Mux [kN-m]']):,.1f} kN-m  \n"
+                                        f"Muy = {float(row['PMM Muy [kN-m]']):,.1f} kN-m"
                                     )
                                     st.divider()
                     with st.expander("Detailed force table", expanded=False):
@@ -2760,7 +2888,7 @@ with tab4:
                             2. `Hx` produces lateral response in X and bending moment about the Y-axis (`Muy`).
                             3. `Hy` produces lateral response in Y and bending moment about the X-axis (`Mux`).
                             4. PMM capacity is generated by ACI 318-style strain compatibility using a Whitney stress block, steel yielding, and phi factors from tensile strain.
-                            5. The biaxial PMM utilization shown is a preliminary linear load-contour check from the uniaxial P-Mx and P-My capacities at the same `Pu`.
+                            5. The primary biaxial PMM utilization is calculated by radial interpolation on the 3D PMM surface at the same `Pu`; the older linear uniaxial load-contour value is kept only as a comparison column.
                             6. Final design should still be verified with the governing ACI edition, project load combinations, slenderness/detailing requirements, and independent engineering review.
                             """
                         )
