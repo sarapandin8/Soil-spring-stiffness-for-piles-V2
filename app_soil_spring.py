@@ -1104,6 +1104,45 @@ def pmm_slice_at_p(pmm_df, pu_kN):
         slice_df = pd.concat([slice_df, slice_df.iloc[[0]]], ignore_index=True)
     return slice_df
 
+def pmm_surface_grid(pmm_df, n_levels=28):
+    """Build PMM surface matrices by stacking constant-Pu interaction slices."""
+    finite = pmm_df.dropna(subset=["Angle [deg]"]).copy()
+    finite = finite[np.isfinite(finite["Angle [deg]"])]
+    finite = finite[
+        np.isfinite(finite["phiMnx [kN-m]"])
+        & np.isfinite(finite["phiMny [kN-m]"])
+        & np.isfinite(finite["phiPn [kN]"])
+    ]
+    if finite.empty:
+        return None
+
+    p_min = max(0.0, float(finite["phiPn [kN]"].quantile(0.02)))
+    p_max = float(finite["phiPn [kN]"].quantile(0.98))
+    if p_max <= p_min:
+        return None
+
+    p_levels = np.linspace(p_min, p_max, int(n_levels))
+    slices = [pmm_slice_at_p(finite, p_level) for p_level in p_levels]
+    slices = [sl for sl in slices if sl is not None and not sl.empty]
+    if len(slices) < 2:
+        return None
+
+    min_len = min(len(sl) for sl in slices)
+    if min_len < 4:
+        return None
+
+    mx_rows, my_rows, p_rows = [], [], []
+    for sl in slices:
+        sl = sl.sort_values("Angle [deg]").iloc[:min_len].copy()
+        mx_rows.append(sl["phiMnx [kN-m]"].to_numpy(dtype=float))
+        my_rows.append(sl["phiMny [kN-m]"].to_numpy(dtype=float))
+        p_rows.append(np.full(min_len, float(sl["phiPn [kN]"].mean())))
+
+    mx = np.asarray(mx_rows)
+    my = np.asarray(my_rows)
+    p = np.asarray(p_rows)
+    return mx, my, p
+
 def calculate_rebar_params(df_results, Ap):
     """Calculate rebar design parameters"""
     kh_valid = pd.to_numeric(df_results["kh_x [kN/m3]"], errors="coerce").replace(0, np.nan).dropna()
@@ -2452,16 +2491,24 @@ with tab4:
                     )
                     if show_3d_pmm:
                         fig_pmm = go.Figure()
-                        fig_pmm.add_trace(go.Mesh3d(
-                            x=pmm_df["phiMnx [kN-m]"],
-                            y=pmm_df["phiMny [kN-m]"],
-                            z=pmm_df["phiPn [kN]"],
-                            alphahull=8,
-                            opacity=0.32,
-                            color="#5fa7dc",
-                            name="PMM surface",
-                            showscale=False,
-                        ))
+                        surface_grid = pmm_surface_grid(pmm_df)
+                        if surface_grid is not None:
+                            sx, sy, sz = surface_grid
+                            fig_pmm.add_trace(go.Surface(
+                                x=sx,
+                                y=sy,
+                                z=sz,
+                                opacity=0.42,
+                                colorscale=[[0, "#cfe7f6"], [1, "#5fa7dc"]],
+                                showscale=False,
+                                name="PMM surface",
+                                contours=dict(
+                                    x=dict(show=False),
+                                    y=dict(show=False),
+                                    z=dict(show=True, color="#7aaed2", width=1),
+                                ),
+                                lighting=dict(ambient=0.65, diffuse=0.55, roughness=0.75),
+                            ))
                         if not slice_df.empty:
                             fig_pmm.add_trace(go.Scatter3d(
                                 x=slice_df["phiMnx [kN-m]"],
