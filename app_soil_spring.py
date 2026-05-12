@@ -4,7 +4,6 @@ import numpy as np
 import plotly.graph_objects as go
 from io import BytesIO
 import json
-import html
 
 st.set_page_config(page_title="Pile Soil Spring Calculator", layout="wide", page_icon="P")
 
@@ -2682,40 +2681,22 @@ with tab4:
                         with pmm_plot_col:
                             st.plotly_chart(fig_pmm, use_container_width=True)
                         with pmm_summary_col:
-                            summary_items = []
-                            for _, row in demand_df.sort_values("PMM Util.", ascending=False).iterrows():
-                                util = float(row["PMM Util."])
-                                is_ng = util > 1.0
-                                color = "#c4123f" if is_ng else "#087f23"
-                                status = "NG" if is_ng else "OK"
-                                load_case_name = html.escape(str(row["Load Case"]))
-                                selected_badge = " selected" if str(row["Load Case"]) == str(slice_case) else ""
-                                summary_items.append(
-                                    f"""
-                                    <div style="border-bottom:1px solid #e2e8f0;padding:8px 0">
-                                        <div style="font-weight:700;color:#1f2937">{load_case_name}{selected_badge}</div>
-                                        <div style="display:flex;justify-content:space-between;gap:8px;font-size:13px">
-                                            <span>U</span><b style="color:{color}">{util:.3f} ({status})</b>
-                                        </div>
-                                        <div style="font-size:12px;color:#64748b;line-height:1.45">
-                                            Pu = {float(row["Max Pu [kN]"]):,.1f} kN<br>
-                                            Mux = {float(row["Max |Mux| [kN-m]"]):,.1f} kN-m<br>
-                                            Muy = {float(row["Max |Muy| [kN-m]"]):,.1f} kN-m
-                                        </div>
-                                    </div>
-                                    """
-                                )
-                            summary_html = "".join(summary_items)
-                            st.markdown(
-                                f"""
-                                <div style="border:1px solid #c8d5e6;border-radius:6px;padding:12px;background:#f8fbff">
-                                    <div style="font-weight:800;margin-bottom:6px">PMM U Summary</div>
-                                    <div style="font-size:12px;color:#64748b;margin-bottom:4px">All active load cases</div>
-                                    {summary_html}
-                                </div>
-                                """,
-                                unsafe_allow_html=True,
-                            )
+                            with st.container(border=True):
+                                st.markdown("**PMM U Summary**")
+                                st.caption("All active load cases")
+                                for _, row in demand_df.sort_values("PMM Util.", ascending=False).iterrows():
+                                    util = float(row["PMM Util."])
+                                    status = "NG" if util > 1.0 else "OK"
+                                    status_color = "red" if util > 1.0 else "green"
+                                    selected_badge = " (selected)" if str(row["Load Case"]) == str(slice_case) else ""
+                                    st.markdown(f"**{row['Load Case']}{selected_badge}**")
+                                    st.markdown(f"U = :{status_color}[**{util:.3f} ({status})**]")
+                                    st.caption(
+                                        f"Pu = {float(row['Max Pu [kN]']):,.1f} kN  \n"
+                                        f"Mux = {float(row['Max |Mux| [kN-m]']):,.1f} kN-m  \n"
+                                        f"Muy = {float(row['Max |Muy| [kN-m]']):,.1f} kN-m"
+                                    )
+                                    st.divider()
                     with st.expander("Detailed force table", expanded=False):
                         st.dataframe(
                             profile_df.style.format({
