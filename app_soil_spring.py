@@ -1055,6 +1055,55 @@ def moment_capacity_at_p(curve_df, pu_kN):
         return 0.0
     return float(np.interp(pu_kN, p_vals, m_vals))
 
+def interaction_curve_envelope(curve_df):
+    """Prepare a clean P-M envelope line from uniaxial interaction points."""
+    if curve_df.empty:
+        return pd.DataFrame(columns=["phiPn [kN]", "phiM [kN-m]"])
+    curve = curve_df.copy()
+    curve = curve[np.isfinite(curve["phiPn [kN]"]) & np.isfinite(curve["phiM [kN-m]"])]
+    if curve.empty:
+        return pd.DataFrame(columns=["phiPn [kN]", "phiM [kN-m]"])
+    curve = curve.groupby(curve["phiPn [kN]"].round(1), as_index=False)["phiM [kN-m]"].max()
+    return curve.sort_values("phiPn [kN]").reset_index(drop=True)
+
+def pmm_slice_at_p(pmm_df, pu_kN):
+    """Interpolate an Mx-My capacity slice at a constant factored axial load."""
+    if pmm_df.empty:
+        return pd.DataFrame(columns=["phiMnx [kN-m]", "phiMny [kN-m]", "phiPn [kN]", "Angle [deg]"])
+
+    rows = []
+    for angle, grp in pmm_df.dropna(subset=["Angle [deg]"]).groupby("Angle [deg]"):
+        grp = grp[np.isfinite(grp["phiPn [kN]"])].copy()
+        if len(grp) < 2:
+            continue
+        grp = grp.sort_values("phiPn [kN]")
+        grouped = grp.groupby(grp["phiPn [kN]"].round(1), as_index=False).agg({
+            "phiMnx [kN-m]": "mean",
+            "phiMny [kN-m]": "mean",
+            "phiPn [kN]": "mean",
+        }).sort_values("phiPn [kN]")
+        p_vals = grouped["phiPn [kN]"].to_numpy(dtype=float)
+        if pu_kN < p_vals.min() or pu_kN > p_vals.max():
+            nearest = grouped.iloc[(grouped["phiPn [kN]"] - pu_kN).abs().argmin()]
+            mx = float(nearest["phiMnx [kN-m]"])
+            my = float(nearest["phiMny [kN-m]"])
+            p_use = float(nearest["phiPn [kN]"])
+        else:
+            mx = float(np.interp(pu_kN, p_vals, grouped["phiMnx [kN-m]"].to_numpy(dtype=float)))
+            my = float(np.interp(pu_kN, p_vals, grouped["phiMny [kN-m]"].to_numpy(dtype=float)))
+            p_use = float(pu_kN)
+        rows.append({
+            "Angle [deg]": float(angle),
+            "phiMnx [kN-m]": mx,
+            "phiMny [kN-m]": my,
+            "phiPn [kN]": p_use,
+        })
+
+    slice_df = pd.DataFrame(rows).sort_values("Angle [deg]").reset_index(drop=True)
+    if not slice_df.empty:
+        slice_df = pd.concat([slice_df, slice_df.iloc[[0]]], ignore_index=True)
+    return slice_df
+
 def calculate_rebar_params(df_results, Ap):
     """Calculate rebar design parameters"""
     kh_valid = pd.to_numeric(df_results["kh_x [kN/m3]"], errors="coerce").replace(0, np.nan).dropna()
@@ -2263,84 +2312,195 @@ with tab4:
                     fd4.plotly_chart(_force_figure("V resultant [kN]", "Shear Force Resultant", "V = sqrt(Vx^2 + Vy^2) [kN]"), use_container_width=True)
 
                     st.subheader("ACI PMM Interaction")
-                    pm1, pm2 = st.columns(2)
 
-                    def _pm_curve_figure(curve_df, moment_col_title, demand_col, title):
-                        fig = go.Figure()
-                        fig.add_trace(go.Scatter(
-                            x=curve_df["phiM [kN-m]"],
-                            y=curve_df["phiPn [kN]"],
-                            mode="markers",
-                            marker=dict(size=4, color="#1a4f8a", opacity=0.55),
-                            name="phi capacity"
-                        ))
-                        for i, row in demand_df.iterrows():
-                            fig.add_trace(go.Scatter(
-                                x=[row[demand_col]],
-                                y=[row["Max Pu [kN]"]],
-                                mode="markers+text",
-                                marker=dict(size=11, symbol=symbols[i % len(symbols)], color=colors[i % len(colors)]),
-                                text=[row["Load Case"]],
-                                textposition="top center",
-                                name=row["Load Case"],
-                                showlegend=False,
-                            ))
-                        fig.update_layout(
-                            height=430,
-                            margin=dict(l=10, r=10, t=45, b=10),
-                            title=dict(text=title, font=dict(size=14)),
-                            xaxis=dict(title=moment_col_title),
-                            yaxis=dict(title="phi Pn [kN]"),
+                    ag_mm2 = Ap * 1e6
+                    as_total_mm2 = float(bar_df["As_mm2"].sum())
+                    rho_prov = as_total_mm2 / max(ag_mm2, 1e-9)
+                    rho_min_temp = 0.002
+                    as_min_temp_mm2 = rho_min_temp * ag_mm2
+                    min_ok = as_total_mm2 >= as_min_temp_mm2
+                    if pile_type == "Round":
+                        face_note = "Round pile: face-by-face rectangular distribution check is not applicable."
+                    else:
+                        as_b_face = int(n_b_face) * get_rebar_area_mm2(main_bar)
+                        as_h_face = int(n_h_face) * get_rebar_area_mm2(main_bar)
+                        face_req = as_min_temp_mm2 / 2.0
+                        face_note = (
+                            f"Required each main face = {face_req:,.0f} mm2; "
+                            f"B faces = {as_b_face:,.0f} mm2 ({'OK' if as_b_face >= face_req else 'NG'}), "
+                            f"H faces = {as_h_face:,.0f} mm2 ({'OK' if as_h_face >= face_req else 'NG'})."
                         )
-                        return fig
 
-                    pm1.plotly_chart(
-                        _pm_curve_figure(mx_curve, "phi Mnx [kN-m]", "Max |Mux| [kN-m]", "P-Mx Interaction"),
-                        use_container_width=True
+                    st.markdown(
+                        f"""
+                        <div style="border:1px solid #c8d5e6;border-radius:6px;padding:12px 14px;background:#f8fbff;margin-bottom:10px">
+                            <div style="font-weight:700;margin-bottom:6px">Minimum Reinforcement Check</div>
+                            <div style="font-size:13px;line-height:1.55">
+                                Shrinkage/temperature distributed reinforcement only. Column longitudinal minimum should be checked separately.<br>
+                                Required rho = {rho_min_temp*100:.3f}%<br>
+                                As,min total = {as_min_temp_mm2:,.0f} mm2, As provided total = {as_total_mm2:,.0f} mm2
+                                <b style="color:{'#087f23' if min_ok else '#c4123f'}">({'OK' if min_ok else 'NG'})</b><br>
+                                {face_note}
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
                     )
-                    pm2.plotly_chart(
-                        _pm_curve_figure(my_curve, "phi Mny [kN-m]", "Max |Muy| [kN-m]", "P-My Interaction"),
-                        use_container_width=True
+
+                    mx_env = interaction_curve_envelope(mx_curve)
+                    my_env = interaction_curve_envelope(my_curve)
+
+                    fig_uni = go.Figure()
+                    fig_uni.add_trace(go.Scatter(
+                        x=mx_env["phiM [kN-m]"],
+                        y=mx_env["phiPn [kN]"],
+                        mode="lines",
+                        line=dict(color="#2356d7", width=4),
+                        name="about x"
+                    ))
+                    fig_uni.add_trace(go.Scatter(
+                        x=my_env["phiM [kN-m]"],
+                        y=my_env["phiPn [kN]"],
+                        mode="lines",
+                        line=dict(color="#c4123f", width=4),
+                        name="about y"
+                    ))
+                    fig_uni.add_trace(go.Scatter(
+                        x=demand_df["Max |Mux| [kN-m]"],
+                        y=demand_df["Max Pu [kN]"],
+                        mode="markers+text",
+                        marker=dict(symbol="x", size=13, color="#2356d7", line=dict(width=3)),
+                        text=demand_df["Load Case"],
+                        textposition="bottom center",
+                        name="Pu, Mux"
+                    ))
+                    fig_uni.add_trace(go.Scatter(
+                        x=demand_df["Max |Muy| [kN-m]"],
+                        y=demand_df["Max Pu [kN]"],
+                        mode="markers+text",
+                        marker=dict(symbol="x", size=13, color="#c4123f", line=dict(width=3)),
+                        text=demand_df["Load Case"],
+                        textposition="top center",
+                        name="Pu, Muy"
+                    ))
+                    fig_uni.update_layout(
+                        height=500,
+                        title=dict(text="Uniaxial interaction curves at base section", font=dict(size=18)),
+                        margin=dict(l=10, r=10, t=70, b=10),
+                        xaxis=dict(title="phi Mn (kN-m)", zeroline=True, zerolinecolor="#758195", gridcolor="#dbe2ec"),
+                        yaxis=dict(title="phi Pn (kN)", zeroline=True, zerolinecolor="#758195", gridcolor="#dbe2ec"),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="center", x=0.5),
+                        plot_bgcolor="white",
                     )
+                    st.plotly_chart(fig_uni, use_container_width=True)
+
+                    governing_index = int(demand_df["PMM Util."].idxmax()) if not demand_df.empty else 0
+                    slice_case = st.selectbox(
+                        "PMM slice load case",
+                        demand_df["Load Case"].tolist(),
+                        index=governing_index,
+                        help="The Mux-Muy slice is drawn at the selected load case Pu."
+                    )
+                    slice_row = demand_df[demand_df["Load Case"] == slice_case].iloc[0]
+                    slice_pu = float(slice_row["Max Pu [kN]"])
+                    slice_df = pmm_slice_at_p(pmm_df, slice_pu)
+                    demand_mx = float(slice_row["Max |Mux| [kN-m]"])
+                    demand_my = float(slice_row["Max |Muy| [kN-m]"])
+
+                    fig_slice = go.Figure()
+                    if not slice_df.empty:
+                        fig_slice.add_trace(go.Scatter(
+                            x=slice_df["phiMnx [kN-m]"],
+                            y=slice_df["phiMny [kN-m]"],
+                            mode="lines",
+                            fill="toself",
+                            fillcolor="rgba(0, 150, 220, 0.12)",
+                            line=dict(color="#008fd3", width=3),
+                            name="PMM slice"
+                        ))
+                    fig_slice.add_trace(go.Scatter(
+                        x=[0.0, demand_mx],
+                        y=[0.0, demand_my],
+                        mode="lines",
+                        line=dict(color="#1b6b6b", width=2),
+                        name="demand vector"
+                    ))
+                    fig_slice.add_trace(go.Scatter(
+                        x=[demand_mx],
+                        y=[demand_my],
+                        mode="markers+text",
+                        marker=dict(symbol="x", color="#1b6b6b", size=13, line=dict(width=3)),
+                        text=[f"{slice_case}<br>U={slice_row['PMM Util.']:.3f}"],
+                        textposition="bottom right",
+                        name="demand"
+                    ))
+                    fig_slice.update_layout(
+                        height=500,
+                        title=dict(text=f"PMM Mux-Muy slice at Pu = {slice_pu:,.0f} kN", font=dict(size=15)),
+                        margin=dict(l=10, r=10, t=60, b=10),
+                        xaxis=dict(title="Mux (kN-m)", zeroline=True, zerolinecolor="#3f4654", gridcolor="#e2e8f0"),
+                        yaxis=dict(title="Muy (kN-m)", zeroline=True, zerolinecolor="#3f4654", gridcolor="#e2e8f0", scaleanchor="x", scaleratio=1),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                        plot_bgcolor="white",
+                    )
+                    st.plotly_chart(fig_slice, use_container_width=True)
 
                     show_3d_pmm = st.checkbox(
-                        "Show 3D PMM point cloud",
+                        "Show 3D PMM interaction surface",
                         value=False,
                         help="The 3D PMM plot is useful for review but can be heavier to render."
                     )
                     if show_3d_pmm:
                         fig_pmm = go.Figure()
-                        fig_pmm.add_trace(go.Scatter3d(
+                        fig_pmm.add_trace(go.Mesh3d(
                             x=pmm_df["phiMnx [kN-m]"],
                             y=pmm_df["phiMny [kN-m]"],
                             z=pmm_df["phiPn [kN]"],
-                            mode="markers",
-                            marker=dict(size=2, color=pmm_df["phiPn [kN]"], colorscale="Viridis", opacity=0.35),
-                            name="PMM capacity"
+                            alphahull=8,
+                            opacity=0.32,
+                            color="#5fa7dc",
+                            name="PMM surface",
+                            showscale=False,
                         ))
-                        for i, row in demand_df.iterrows():
+                        if not slice_df.empty:
                             fig_pmm.add_trace(go.Scatter3d(
-                                x=[row["Max |Mux| [kN-m]"]],
-                                y=[row["Max |Muy| [kN-m]"]],
-                                z=[row["Max Pu [kN]"]],
-                                mode="markers+text",
-                                marker=dict(size=6, symbol="circle", color=colors[i % len(colors)]),
-                                text=[row["Load Case"]],
-                                textposition="top center",
-                                name=row["Load Case"],
+                                x=slice_df["phiMnx [kN-m]"],
+                                y=slice_df["phiMny [kN-m]"],
+                                z=np.full(len(slice_df), slice_pu),
+                                mode="lines",
+                                line=dict(color="#008fd3", width=5),
+                                name="current Pu slice"
                             ))
+                        fig_pmm.add_trace(go.Scatter3d(
+                            x=[0.0, demand_mx],
+                            y=[0.0, demand_my],
+                            z=[slice_pu, slice_pu],
+                            mode="lines",
+                            line=dict(color="#1b6b6b", width=5),
+                            name="demand vector"
+                        ))
+                        fig_pmm.add_trace(go.Scatter3d(
+                            x=[demand_mx],
+                            y=[demand_my],
+                            z=[slice_pu],
+                            mode="markers+text",
+                            marker=dict(size=7, color="#1b6b6b"),
+                            text=[f"U={slice_row['PMM Util.']:.3f}"],
+                            textposition="top center",
+                            name="load point",
+                        ))
                         fig_pmm.update_layout(
-                            height=560,
+                            height=620,
                             margin=dict(l=0, r=0, t=45, b=0),
-                            title=dict(text="PMM Interaction Point Cloud", font=dict(size=14)),
+                            title=dict(text="3D PMM interaction surface with load point", font=dict(size=15)),
                             scene=dict(
-                                xaxis_title="phi Mnx [kN-m]",
-                                yaxis_title="phi Mny [kN-m]",
-                                zaxis_title="phi Pn [kN]",
+                                xaxis_title="Mux (kN-m)",
+                                yaxis_title="Muy (kN-m)",
+                                zaxis_title="Pu (kN)",
                             ),
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                         )
                         st.plotly_chart(fig_pmm, use_container_width=True)
-
                     with st.expander("Detailed force table", expanded=False):
                         st.dataframe(
                             profile_df.style.format({
