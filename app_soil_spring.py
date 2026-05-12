@@ -1143,6 +1143,67 @@ def pmm_surface_grid(pmm_df, n_levels=28):
     p = np.asarray(p_rows)
     return mx, my, p
 
+def pmm_polar_surface_grid(pmm_df, n_levels=30, n_angles=73):
+    """Build a closed PMM surface by stacking polar Mx-My capacity slices."""
+    finite = pmm_df.dropna(subset=["Angle [deg]"]).copy()
+    finite = finite[
+        np.isfinite(finite["phiMnx [kN-m]"])
+        & np.isfinite(finite["phiMny [kN-m]"])
+        & np.isfinite(finite["phiPn [kN]"])
+    ]
+    if finite.empty:
+        return None
+
+    p_min = max(0.0, float(finite["phiPn [kN]"].quantile(0.02)))
+    p_max = float(finite["phiPn [kN]"].quantile(0.98))
+    if p_max <= p_min:
+        return None
+
+    theta = np.linspace(0.0, 2.0 * np.pi, int(n_angles))
+    p_levels = np.linspace(p_min, p_max, int(n_levels))
+    mx_rows, my_rows, p_rows = [], [], []
+
+    for p_level in p_levels:
+        sl = pmm_slice_at_p(finite, p_level)
+        if sl is None or sl.empty:
+            continue
+
+        x_vals = sl["phiMnx [kN-m]"].to_numpy(dtype=float)
+        y_vals = sl["phiMny [kN-m]"].to_numpy(dtype=float)
+        radii = np.hypot(x_vals, y_vals)
+        angles = np.mod(np.arctan2(y_vals, x_vals), 2.0 * np.pi)
+        valid = np.isfinite(radii) & np.isfinite(angles) & (radii > 1e-9)
+        if valid.sum() < 4:
+            continue
+
+        polar = pd.DataFrame({
+            "angle": angles[valid],
+            "radius": radii[valid],
+        })
+        polar["angle_key"] = polar["angle"].round(6)
+        polar = (
+            polar.groupby("angle_key", as_index=False)
+            .agg({"angle": "mean", "radius": "max"})
+            .sort_values("angle")
+        )
+        if len(polar) < 4:
+            continue
+
+        angle_vals = polar["angle"].to_numpy(dtype=float)
+        radius_vals = polar["radius"].to_numpy(dtype=float)
+        angle_ext = np.concatenate([angle_vals[-1:] - 2.0 * np.pi, angle_vals, angle_vals[:1] + 2.0 * np.pi])
+        radius_ext = np.concatenate([radius_vals[-1:], radius_vals, radius_vals[:1]])
+        radius_grid = np.interp(theta, angle_ext, radius_ext)
+
+        mx_rows.append(radius_grid * np.cos(theta))
+        my_rows.append(radius_grid * np.sin(theta))
+        p_rows.append(np.full_like(theta, float(p_level)))
+
+    if len(mx_rows) < 2:
+        return None
+
+    return np.asarray(mx_rows), np.asarray(my_rows), np.asarray(p_rows)
+
 def calculate_rebar_params(df_results, Ap):
     """Calculate rebar design parameters"""
     kh_valid = pd.to_numeric(df_results["kh_x [kN/m3]"], errors="coerce").replace(0, np.nan).dropna()
@@ -2391,18 +2452,18 @@ with tab4:
 
                     fig_uni = go.Figure()
                     fig_uni.add_trace(go.Scatter(
+                        x=my_env["phiM [kN-m]"],
+                        y=my_env["phiPn [kN]"],
+                        mode="lines",
+                        line=dict(color="#c4123f", width=4, dash="dash"),
+                        name="about y"
+                    ))
+                    fig_uni.add_trace(go.Scatter(
                         x=mx_env["phiM [kN-m]"],
                         y=mx_env["phiPn [kN]"],
                         mode="lines",
                         line=dict(color="#2356d7", width=4),
                         name="about x"
-                    ))
-                    fig_uni.add_trace(go.Scatter(
-                        x=my_env["phiM [kN-m]"],
-                        y=my_env["phiPn [kN]"],
-                        mode="lines",
-                        line=dict(color="#c4123f", width=4),
-                        name="about y"
                     ))
                     fig_uni.add_trace(go.Scatter(
                         x=demand_df["Max |Mux| [kN-m]"],
@@ -2424,7 +2485,7 @@ with tab4:
                     ))
                     fig_uni.update_layout(
                         height=500,
-                        title=dict(text="Uniaxial interaction curves at base section", font=dict(size=18)),
+                        title=dict(text="Uniaxial interaction curves", font=dict(size=18)),
                         margin=dict(l=10, r=10, t=70, b=10),
                         xaxis=dict(title="phi Mn (kN-m)", zeroline=True, zerolinecolor="#758195", gridcolor="#dbe2ec"),
                         yaxis=dict(title="phi Pn (kN)", zeroline=True, zerolinecolor="#758195", gridcolor="#dbe2ec"),
@@ -2432,6 +2493,8 @@ with tab4:
                         plot_bgcolor="white",
                     )
                     st.plotly_chart(fig_uni, use_container_width=True)
+                    if pile_type == "Round":
+                        st.caption("For round piles, the about-x and about-y interaction curves are nearly identical, so the dashed red curve can overlap the blue curve.")
 
                     governing_index = int(demand_df["PMM Util."].idxmax()) if not demand_df.empty else 0
                     slice_case = st.selectbox(
@@ -2491,7 +2554,7 @@ with tab4:
                     )
                     if show_3d_pmm:
                         fig_pmm = go.Figure()
-                        surface_grid = pmm_surface_grid(pmm_df)
+                        surface_grid = pmm_polar_surface_grid(pmm_df)
                         if surface_grid is not None:
                             sx, sy, sz = surface_grid
                             fig_pmm.add_trace(go.Surface(
