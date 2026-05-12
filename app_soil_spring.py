@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from io import BytesIO
 import json
+import html
 
 st.set_page_config(page_title="Pile Soil Spring Calculator", layout="wide", page_icon="P")
 
@@ -2624,20 +2625,52 @@ with tab4:
                             line=dict(color="#1b6b6b", width=5),
                             name="demand vector"
                         ))
+                        load_point_colors = [
+                            "#c4123f" if float(u) > 1.0 else "#1b6b6b"
+                            for u in demand_df["PMM Util."]
+                        ]
+                        fig_pmm.add_trace(go.Scatter3d(
+                            x=demand_df["Max |Mux| [kN-m]"],
+                            y=demand_df["Max |Muy| [kN-m]"],
+                            z=demand_df["Max Pu [kN]"],
+                            mode="markers+text",
+                            marker=dict(
+                                size=6,
+                                color=load_point_colors,
+                                line=dict(color="white", width=1),
+                            ),
+                            text=demand_df["Load Case"],
+                            textposition="top center",
+                            customdata=np.stack([
+                                demand_df["PMM Util."].to_numpy(dtype=float),
+                                demand_df["Max |Mux| [kN-m]"].to_numpy(dtype=float),
+                                demand_df["Max |Muy| [kN-m]"].to_numpy(dtype=float),
+                                demand_df["Max Pu [kN]"].to_numpy(dtype=float),
+                            ], axis=-1),
+                            hovertemplate=(
+                                "%{text}<br>"
+                                "U = %{customdata[0]:.3f}<br>"
+                                "Mux = %{customdata[1]:,.1f} kN-m<br>"
+                                "Muy = %{customdata[2]:,.1f} kN-m<br>"
+                                "Pu = %{customdata[3]:,.1f} kN"
+                                "<extra></extra>"
+                            ),
+                            name="all load points",
+                        ))
                         fig_pmm.add_trace(go.Scatter3d(
                             x=[demand_mx],
                             y=[demand_my],
                             z=[slice_pu],
                             mode="markers+text",
-                            marker=dict(size=7, color="#1b6b6b"),
+                            marker=dict(size=8, color="#0f766e", line=dict(color="white", width=1.5)),
                             text=[f"U={slice_row['PMM Util.']:.3f}"],
                             textposition="top center",
-                            name="load point",
+                            name="selected load point",
                         ))
                         fig_pmm.update_layout(
                             height=620,
                             margin=dict(l=0, r=0, t=45, b=0),
-                            title=dict(text="3D PMM interaction surface with load point", font=dict(size=15)),
+                            title=dict(text="3D PMM interaction surface with load points", font=dict(size=15)),
                             scene=dict(
                                 xaxis_title="Mux (kN-m)",
                                 yaxis_title="Muy (kN-m)",
@@ -2645,7 +2678,44 @@ with tab4:
                             ),
                             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                         )
-                        st.plotly_chart(fig_pmm, use_container_width=True)
+                        pmm_plot_col, pmm_summary_col = st.columns([4.2, 1.25], gap="medium")
+                        with pmm_plot_col:
+                            st.plotly_chart(fig_pmm, use_container_width=True)
+                        with pmm_summary_col:
+                            summary_items = []
+                            for _, row in demand_df.sort_values("PMM Util.", ascending=False).iterrows():
+                                util = float(row["PMM Util."])
+                                is_ng = util > 1.0
+                                color = "#c4123f" if is_ng else "#087f23"
+                                status = "NG" if is_ng else "OK"
+                                load_case_name = html.escape(str(row["Load Case"]))
+                                selected_badge = " selected" if str(row["Load Case"]) == str(slice_case) else ""
+                                summary_items.append(
+                                    f"""
+                                    <div style="border-bottom:1px solid #e2e8f0;padding:8px 0">
+                                        <div style="font-weight:700;color:#1f2937">{load_case_name}{selected_badge}</div>
+                                        <div style="display:flex;justify-content:space-between;gap:8px;font-size:13px">
+                                            <span>U</span><b style="color:{color}">{util:.3f} ({status})</b>
+                                        </div>
+                                        <div style="font-size:12px;color:#64748b;line-height:1.45">
+                                            Pu = {float(row["Max Pu [kN]"]):,.1f} kN<br>
+                                            Mux = {float(row["Max |Mux| [kN-m]"]):,.1f} kN-m<br>
+                                            Muy = {float(row["Max |Muy| [kN-m]"]):,.1f} kN-m
+                                        </div>
+                                    </div>
+                                    """
+                                )
+                            summary_html = "".join(summary_items)
+                            st.markdown(
+                                f"""
+                                <div style="border:1px solid #c8d5e6;border-radius:6px;padding:12px;background:#f8fbff">
+                                    <div style="font-weight:800;margin-bottom:6px">PMM U Summary</div>
+                                    <div style="font-size:12px;color:#64748b;margin-bottom:4px">All active load cases</div>
+                                    {summary_html}
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
                     with st.expander("Detailed force table", expanded=False):
                         st.dataframe(
                             profile_df.style.format({
