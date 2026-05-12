@@ -1451,12 +1451,14 @@ def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, Ap, Ep, Ipx,
     return buf.read()
 st.sidebar.title("Pile Spring Calculator")
 st.sidebar.caption(f"version {VERSION}")
-st.sidebar.markdown("---")
 
 for _msg_key, _box in (("_just_loaded_msg", st.sidebar.success),
                       ("_just_profile_msg", st.sidebar.success)):
     if _msg_key in st.session_state and st.session_state[_msg_key]:
         _box(st.session_state.pop(_msg_key))
+
+save_load_panel = st.sidebar.container()
+st.sidebar.markdown("---")
 
 st.sidebar.header("1. Project Settings")
 c1, c2 = st.sidebar.columns(2)
@@ -1674,6 +1676,49 @@ with tab1:
                     st.write(m)
 df_soil = st.session_state.get("_soil_edited", st.session_state.soil_layers)
 
+with save_load_panel:
+    st.header("Save / Load Design")
+    project_data = save_project_to_dict(
+        design_stage, method, pile_type, D, B, H, L, fc, node_spacing, nu,
+        water_table, scour_depth, use_group, s_D, nx, ny, spring_output,
+        df_soil, VERSION
+    )
+    json_str = json.dumps(project_data, indent=2, ensure_ascii=True)
+    st.download_button(
+        "Save Project",
+        data=json_str,
+        file_name=f"PileProject_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.json",
+        mime="application/json",
+        use_container_width=True
+    )
+
+    uploaded_file = st.file_uploader(
+        "Open project JSON",
+        type=["json"],
+        help="Select a saved .json project file.",
+        key="_project_uploader",
+    )
+
+    # Use the pending-load pattern to avoid Streamlit widget-state errors.
+    if uploaded_file is not None:
+        file_id = getattr(uploaded_file, "file_id", uploaded_file.name + str(uploaded_file.size))
+        last_id = st.session_state.get("_last_loaded_file_id")
+        if last_id != file_id:
+            try:
+                loaded_data = json.load(uploaded_file)
+                updates = load_project_from_dict(loaded_data)
+                updates["__msg__"] = (
+                    f"Project loaded successfully. "
+                    f"Saved at: {loaded_data.get('saved_timestamp', 'N/A')[:19]}"
+                )
+                st.session_state["_pending_load"] = updates
+                st.session_state["_last_loaded_file_id"] = file_id
+                st.rerun()
+            except json.JSONDecodeError as e:
+                st.error(f"Invalid JSON file: {e}")
+            except Exception as e:
+                st.error(f"Could not load project file: {e}")
+
 _REQUIRED_COLS = {
     "Depth_From": "Depth_From",
     "Depth_To": "Depth_To",
@@ -1880,50 +1925,6 @@ else:
         use_container_width=True,
         help="Complete the soil layer input first.",
     )
-
-st.sidebar.header("6. Save / Load Project")
-
-project_data = save_project_to_dict(
-    design_stage, method, pile_type, D, B, H, L, fc, node_spacing, nu,
-    water_table, scour_depth, use_group, s_D, nx, ny, spring_output,
-    st.session_state.get("_soil_edited", st.session_state.soil_layers), VERSION
-)
-json_str = json.dumps(project_data, indent=2, ensure_ascii=True)
-st.sidebar.download_button(
-    "Save Project (.json)",
-    data=json_str,
-    file_name=f"PileProject_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.json",
-    mime="application/json",
-    use_container_width=True
-)
-
-st.sidebar.markdown("---")
-uploaded_file = st.sidebar.file_uploader(
-    "Open Project File",
-    type=["json"],
-    help="Select a saved .json project file.",
-    key="_project_uploader",
-)
-
-# Use the pending-load pattern to avoid Streamlit widget-state errors.
-if uploaded_file is not None:
-    file_id = getattr(uploaded_file, "file_id", uploaded_file.name + str(uploaded_file.size))
-    last_id = st.session_state.get("_last_loaded_file_id")
-    if last_id != file_id:
-        try:
-            loaded_data = json.load(uploaded_file)
-            updates = load_project_from_dict(loaded_data)
-            updates["__msg__"] = (
-                f"Project loaded successfully. "
-                f"Saved at: {loaded_data.get('saved_timestamp', 'N/A')[:19]}"
-            )
-            st.session_state["_pending_load"] = updates
-            st.session_state["_last_loaded_file_id"] = file_id
-            st.rerun()
-        except json.JSONDecodeError as e:
-            st.sidebar.error(f"Invalid JSON file: {e}")
-        except Exception as e:
-            st.sidebar.error(f"Could not load project file: {e}")
 
 st.sidebar.markdown("---")
 st.sidebar.caption(f"App Version {VERSION}")
