@@ -792,6 +792,269 @@ def pile_rebar_section_figure(
     )
     return fig
 
+def get_rebar_layout(
+    pile_type, D, B, H, clear_cover_mm, tie_bar, main_bar,
+    n_round_bars=None, n_b_face=None, n_h_face=None
+):
+    """Return perimeter reinforcement coordinates in mm about the section centroid."""
+    main_dia_mm = float(REBAR_DB[main_bar]["dia_mm"])
+    tie_dia_mm = float(REBAR_DB[tie_bar]["dia_mm"])
+    cover_mm = float(clear_cover_mm)
+    as_bar_mm2 = get_rebar_area_mm2(main_bar)
+    fy_mpa = get_rebar_fy_mpa(main_bar)
+    coords = []
+
+    if pile_type == "Round":
+        radius_mm = D * 1000.0 / 2.0
+        r_bar = max(radius_mm - cover_mm - tie_dia_mm - main_dia_mm / 2.0, main_dia_mm)
+        n_bars = max(int(n_round_bars or 6), 4)
+        for ang in np.linspace(0, 2 * np.pi, n_bars, endpoint=False):
+            coords.append((r_bar * np.cos(ang), r_bar * np.sin(ang)))
+    else:
+        x0, x1 = -B * 1000.0 / 2.0, B * 1000.0 / 2.0
+        y0, y1 = -H * 1000.0 / 2.0, H * 1000.0 / 2.0
+        nb = max(int(n_b_face or 3), 2)
+        nh = max(int(n_h_face or 3), 2)
+        x_bar = np.linspace(
+            x0 + cover_mm + tie_dia_mm + main_dia_mm / 2.0,
+            x1 - cover_mm - tie_dia_mm - main_dia_mm / 2.0,
+            nb
+        )
+        y_bar = np.linspace(
+            y0 + cover_mm + tie_dia_mm + main_dia_mm / 2.0,
+            y1 - cover_mm - tie_dia_mm - main_dia_mm / 2.0,
+            nh
+        )
+        for x in x_bar:
+            coords.append((x, y_bar[0]))
+            coords.append((x, y_bar[-1]))
+        for y in y_bar[1:-1]:
+            coords.append((x_bar[0], y))
+            coords.append((x_bar[-1], y))
+
+    return pd.DataFrame({
+        "x_mm": [pt[0] for pt in coords],
+        "y_mm": [pt[1] for pt in coords],
+        "As_mm2": as_bar_mm2,
+        "fy_mpa": fy_mpa,
+    })
+
+def make_concrete_fibers(pile_type, D, B, H, grid_n=44):
+    """Create a concrete fiber mesh scaled to the exact section area."""
+    if pile_type == "Round":
+        radius_mm = D * 1000.0 / 2.0
+        cell = 2.0 * radius_mm / grid_n
+        coords = np.linspace(-radius_mm + cell / 2.0, radius_mm - cell / 2.0, grid_n)
+        xs, ys = np.meshgrid(coords, coords)
+        mask = xs**2 + ys**2 <= radius_mm**2
+        x = xs[mask].ravel()
+        y = ys[mask].ravel()
+        area = np.full_like(x, cell * cell, dtype=float)
+        exact_area = np.pi * radius_mm**2
+    else:
+        b_mm = B * 1000.0
+        h_mm = H * 1000.0
+        nx = grid_n
+        ny = max(12, int(round(grid_n * h_mm / max(b_mm, 1e-6))))
+        x_coords = np.linspace(-b_mm / 2.0 + b_mm / (2 * nx), b_mm / 2.0 - b_mm / (2 * nx), nx)
+        y_coords = np.linspace(-h_mm / 2.0 + h_mm / (2 * ny), h_mm / 2.0 - h_mm / (2 * ny), ny)
+        xs, ys = np.meshgrid(x_coords, y_coords)
+        x = xs.ravel()
+        y = ys.ravel()
+        area = np.full_like(x, b_mm * h_mm / (nx * ny), dtype=float)
+        exact_area = b_mm * h_mm
+
+    if area.sum() > 0:
+        area *= exact_area / area.sum()
+    return x, y, area, exact_area
+
+def aci_beta1(fc_mpa):
+    """ACI equivalent stress block beta1 for normal-strength concrete in MPa units."""
+    return max(0.85 - max(float(fc_mpa) - 28.0, 0.0) * 0.05 / 7.0, 0.65)
+
+def aci_phi_from_tension_strain(eps_t, fy_mpa, transverse_system="Tied"):
+    """ACI-style phi factor from extreme tensile steel strain."""
+    eps_y = float(fy_mpa) / 200000.0
+    phi_min = 0.75 if transverse_system == "Spiral" else 0.65
+    if eps_t <= eps_y:
+        return phi_min
+    if eps_t >= 0.005:
+        return 0.90
+    return phi_min + (0.90 - phi_min) * (eps_t - eps_y) / max(0.005 - eps_y, 1e-9)
+
+def aci_section_strength_at_angle(
+    fiber_x, fiber_y, fiber_area, bar_df, fc_mpa, theta_rad, c_mm,
+    exact_area_mm2, transverse_system="Tied"
+):
+    """Nominal and factored section strength for one neutral-axis angle and depth."""
+    beta1 = aci_beta1(fc_mpa)
+    normal_x = np.cos(theta_rad)
+    normal_y = np.sin(theta_rad)
+    fiber_t = fiber_x * normal_x + fiber_y * normal_y
+    bar_t = bar_df["x_mm"].to_numpy(dtype=float) * normal_x + bar_df["y_mm"].to_numpy(dtype=float) * normal_y
+    t_max = float(np.max(fiber_t))
+    t_na = t_max - float(c_mm)
+    t_block_min = t_max - beta1 * float(c_mm)
+
+    concrete_mask = fiber_t >= t_block_min
+    concrete_force = 0.85 * fc_mpa * fiber_area[concrete_mask]
+    concrete_x = fiber_x[concrete_mask]
+    concrete_y = fiber_y[concrete_mask]
+
+    eps_s = 0.003 * (bar_t - t_na) / max(float(c_mm), 1e-9)
+    as_bars = bar_df["As_mm2"].to_numpy(dtype=float)
+    fy_bars = bar_df["fy_mpa"].to_numpy(dtype=float)
+    fs = np.minimum(np.maximum(200000.0 * eps_s, -fy_bars), fy_bars)
+    steel_force = fs * as_bars
+    steel_force = steel_force - np.where(bar_t >= t_block_min, 0.85 * fc_mpa * as_bars, 0.0)
+
+    forces = np.concatenate([concrete_force, steel_force])
+    xs = np.concatenate([concrete_x, bar_df["x_mm"].to_numpy(dtype=float)])
+    ys = np.concatenate([concrete_y, bar_df["y_mm"].to_numpy(dtype=float)])
+
+    pn_n = float(np.sum(forces))
+    mx_nmm = float(np.sum(forces * ys))
+    my_nmm = float(np.sum(forces * xs))
+
+    eps_t = max(0.0, -float(np.min(eps_s))) if len(eps_s) else 0.0
+    fy_ref = float(np.max(fy_bars)) if len(fy_bars) else 390.0
+    phi = aci_phi_from_tension_strain(eps_t, fy_ref, transverse_system)
+
+    ast = float(np.sum(as_bars))
+    po_n = 0.85 * fc_mpa * max(exact_area_mm2 - ast, 0.0) + fy_ref * ast
+    axial_cap_factor = 0.85 if transverse_system == "Spiral" else 0.80
+    phi_pn_max_kN = axial_cap_factor * (0.75 if transverse_system == "Spiral" else 0.65) * po_n / 1000.0
+
+    phi_pn_kN = phi * pn_n / 1000.0
+    if phi_pn_kN > phi_pn_max_kN:
+        phi_pn_kN = phi_pn_max_kN
+
+    return {
+        "Pn [kN]": pn_n / 1000.0,
+        "Mx [kN-m]": mx_nmm / 1e6,
+        "My [kN-m]": my_nmm / 1e6,
+        "phi": phi,
+        "phiPn [kN]": phi_pn_kN,
+        "phiMnx [kN-m]": phi * mx_nmm / 1e6,
+        "phiMny [kN-m]": phi * my_nmm / 1e6,
+        "eps_t": eps_t,
+        "phiPnMax [kN]": phi_pn_max_kN,
+    }
+
+@st.cache_data(show_spinner=False)
+def build_aci_pmm_interaction(
+    pile_type, D, B, H, fc_mpa, cover_mm, tie_bar, main_bar,
+    n_main_bars=None, n_b_face=None, n_h_face=None, transverse_system="Tied",
+    grid_n=28
+):
+    """Build a preliminary ACI 318-style PMM interaction point cloud."""
+    bars = get_rebar_layout(
+        pile_type, D, B, H, cover_mm, tie_bar, main_bar,
+        n_round_bars=n_main_bars, n_b_face=n_b_face, n_h_face=n_h_face
+    )
+    fiber_x, fiber_y, fiber_area, exact_area = make_concrete_fibers(pile_type, D, B, H, grid_n=grid_n)
+    max_dim_mm = max(D, B, H) * 1000.0
+    c_values = np.unique(np.concatenate([
+        np.linspace(0.05 * max_dim_mm, 1.50 * max_dim_mm, 26),
+        np.linspace(1.75 * max_dim_mm, 7.00 * max_dim_mm, 14),
+    ]))
+    angles = np.unique(np.concatenate([
+        np.linspace(0.0, 360.0, 17, endpoint=False),
+        np.array([0.0, 90.0, 180.0, 270.0]),
+    ]))
+
+    rows = []
+    for angle_deg in angles:
+        theta = np.radians(angle_deg)
+        for c_mm in c_values:
+            strength = aci_section_strength_at_angle(
+                fiber_x, fiber_y, fiber_area, bars, fc_mpa, theta, c_mm,
+                exact_area, transverse_system
+            )
+            rows.append({
+                "Angle [deg]": angle_deg,
+                "c [mm]": c_mm,
+                **strength,
+            })
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        ast = float(bars["As_mm2"].sum())
+        fy_ref = float(bars["fy_mpa"].max())
+        phi_tension = 0.90
+        df = pd.concat([
+            df,
+            pd.DataFrame([{
+                "Angle [deg]": np.nan,
+                "c [mm]": np.inf,
+                "Pn [kN]": df["phiPnMax [kN]"].max() / (0.75 if transverse_system == "Spiral" else 0.65),
+                "Mx [kN-m]": 0.0,
+                "My [kN-m]": 0.0,
+                "phi": 0.75 if transverse_system == "Spiral" else 0.65,
+                "phiPn [kN]": df["phiPnMax [kN]"].max(),
+                "phiMnx [kN-m]": 0.0,
+                "phiMny [kN-m]": 0.0,
+                "eps_t": 0.0,
+                "phiPnMax [kN]": df["phiPnMax [kN]"].max(),
+            }, {
+                "Angle [deg]": np.nan,
+                "c [mm]": 0.0,
+                "Pn [kN]": -fy_ref * ast / 1000.0,
+                "Mx [kN-m]": 0.0,
+                "My [kN-m]": 0.0,
+                "phi": phi_tension,
+                "phiPn [kN]": -phi_tension * fy_ref * ast / 1000.0,
+                "phiMnx [kN-m]": 0.0,
+                "phiMny [kN-m]": 0.0,
+                "eps_t": 0.005,
+                "phiPnMax [kN]": df["phiPnMax [kN]"].max(),
+            }])
+        ], ignore_index=True)
+    return df, bars
+
+def uniaxial_interaction_curve(pmm_df, axis):
+    """Extract an approximate uniaxial P-M envelope from the PMM point cloud."""
+    if pmm_df.empty:
+        return pd.DataFrame(columns=["phiPn [kN]", "phiM [kN-m]"])
+    available_angles = pmm_df["Angle [deg]"].dropna().to_numpy(dtype=float)
+    if len(available_angles) == 0:
+        selected = pmm_df.copy()
+    else:
+        def _nearest_angle(target):
+            diff = np.abs(((available_angles - target + 180.0) % 360.0) - 180.0)
+            return float(available_angles[int(np.argmin(diff))])
+
+        targets = [90.0, 270.0] if axis == "Mx" else [0.0, 180.0]
+        selected_angles = {_nearest_angle(t) for t in targets}
+        selected = pmm_df[pmm_df["Angle [deg]"].isin(selected_angles)].copy()
+    if axis == "Mx":
+        m_col = "phiMnx [kN-m]"
+    else:
+        m_col = "phiMny [kN-m]"
+    if selected.empty:
+        selected = pmm_df.copy()
+        m_col = "phiMnx [kN-m]" if axis == "Mx" else "phiMny [kN-m]"
+    return pd.DataFrame({
+        "phiPn [kN]": selected["phiPn [kN]"],
+        "phiM [kN-m]": selected[m_col].abs(),
+    }).dropna()
+
+def moment_capacity_at_p(curve_df, pu_kN):
+    """Interpolate factored uniaxial moment capacity at a factored axial demand."""
+    if curve_df.empty:
+        return 0.0
+    curve = curve_df.copy()
+    curve = curve[np.isfinite(curve["phiPn [kN]"]) & np.isfinite(curve["phiM [kN-m]"])]
+    if curve.empty:
+        return 0.0
+    grouped = curve.groupby(curve["phiPn [kN]"].round(1))["phiM [kN-m]"].max().reset_index()
+    grouped = grouped.sort_values("phiPn [kN]")
+    p_vals = grouped["phiPn [kN]"].to_numpy(dtype=float)
+    m_vals = grouped["phiM [kN-m]"].to_numpy(dtype=float)
+    if pu_kN < p_vals.min() or pu_kN > p_vals.max():
+        return 0.0
+    return float(np.interp(pu_kN, p_vals, m_vals))
+
 def calculate_rebar_params(df_results, Ap):
     """Calculate rebar design parameters"""
     kh_valid = pd.to_numeric(df_results["kh_x [kN/m3]"], errors="coerce").replace(0, np.nan).dropna()
@@ -1684,9 +1947,8 @@ Report the chosen primary method and include sensitivity checks where project ri
 with tab4:
     st.header("Pile Design")
     st.caption(
-        "Preliminary reinforced concrete pile design using the calculated lateral springs. "
-        "This section solves pile-head loading on a Winkler beam, then checks main bars and ties "
-        "from the resulting axial force, shear, and moment profiles."
+        "Load-case based reinforced concrete pile design. Enter factored axial load and pile-head shears, "
+        "then review force diagrams, envelopes, and preliminary ACI 318-style PMM interaction checks."
     )
 
     if not _ready or df_results.empty:
@@ -1696,273 +1958,420 @@ with tab4:
         if use_group and not df_row_results.empty:
             source_options.append("Row-based spring")
 
-        sel1, sel2, sel3 = st.columns([1.2, 1.0, 1.0])
-        spring_source = sel1.selectbox(
+        src_col, rowx_col, rowy_col = st.columns([1.2, 1.0, 1.0])
+        spring_source = src_col.selectbox(
             "Spring source",
             source_options,
-            help="Global average uses Ksx/Ksy from the main results table. Row-based uses one selected pile row."
+            help="Global average uses Ksx/Ksy from the main results table. Row-based uses selected pile rows."
         )
-        design_direction = sel2.selectbox(
-            "Loading direction",
-            ["X", "Y"],
-            help="X loading uses Ksx and bending about the Y-axis. Y loading uses Ksy and bending about the X-axis."
-        )
-
         if spring_source == "Row-based spring":
-            row_limit = int(nx) if design_direction == "X" else int(ny)
-            design_row = sel3.selectbox(
-                "Pile row",
-                list(range(1, row_limit + 1)),
-                help="Select the pile row to design when using the row-based spring table."
-            )
+            x_design_row = rowx_col.selectbox("X-direction pile row", list(range(1, int(nx) + 1)))
+            y_design_row = rowy_col.selectbox("Y-direction pile row", list(range(1, int(ny) + 1)))
         else:
-            design_row = 1
-            sel3.metric("Pile row", "Average")
+            x_design_row = y_design_row = 1
+            rowx_col.metric("X pile row", "Average")
+            rowy_col.metric("Y pile row", "Average")
 
-        load_c1, load_c2, load_c3 = st.columns(3)
-        Pu_kN = load_c1.number_input(
-            "Factored axial compression Pu [kN]",
-            min_value=0.0,
-            value=1500.0,
-            step=100.0,
-            help="Compression-positive axial load used along the pile length."
-        )
-        Hu_kN = load_c2.number_input(
-            "Pile-head shear H [kN]",
-            min_value=0.0,
-            value=200.0,
-            step=10.0,
-            help="Applied lateral shear at pile head for the selected direction."
-        )
-        Mu_kNm = load_c3.number_input(
-            "Pile-head moment M [kN-m]",
-            min_value=0.0,
-            value=100.0,
-            step=10.0,
-            help="Applied bending moment at pile head."
-        )
+        st.subheader("Load Cases")
+        default_load_cases = pd.DataFrame({
+            "Use": [True, True, True],
+            "Load Case": ["LC1", "LC2", "LC3"],
+            "Pu [kN]": [1500.0, 1800.0, 1200.0],
+            "Hx [kN]": [200.0, 0.0, 160.0],
+            "Hy [kN]": [0.0, 200.0, 120.0],
+        })
+        if "pile_design_load_cases" not in st.session_state:
+            st.session_state["pile_design_load_cases"] = default_load_cases
 
-        det1, det2, det3, det4 = st.columns(4)
+        load_case_input = st.data_editor(
+            st.session_state["pile_design_load_cases"],
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            key="pile_design_load_case_editor",
+            column_config={
+                "Use": st.column_config.CheckboxColumn("Use", default=True, width="small"),
+                "Load Case": st.column_config.TextColumn("Load Case", width="medium"),
+                "Pu [kN]": st.column_config.NumberColumn("Pu [kN]", format="%.1f", help="Compression positive; use negative for tension/uplift."),
+                "Hx [kN]": st.column_config.NumberColumn("Pile-head shear Hx [kN]", format="%.1f"),
+                "Hy [kN]": st.column_config.NumberColumn("Pile-head shear Hy [kN]", format="%.1f"),
+            }
+        )
+        st.session_state["pile_design_load_cases"] = load_case_input.copy()
+
+        load_cases = load_case_input.copy()
+        for col in ["Pu [kN]", "Hx [kN]", "Hy [kN]"]:
+            load_cases[col] = pd.to_numeric(load_cases[col], errors="coerce").fillna(0.0)
+        if "Use" not in load_cases:
+            load_cases["Use"] = True
+        load_cases["Use"] = load_cases["Use"].fillna(True).astype(bool)
+        load_cases["Load Case"] = load_cases["Load Case"].astype(str).replace({"nan": ""})
+        for idx in load_cases.index:
+            if not load_cases.loc[idx, "Load Case"].strip():
+                load_cases.loc[idx, "Load Case"] = f"LC{idx + 1}"
+        active_cases = load_cases[load_cases["Use"]].copy().reset_index(drop=True)
+
+        st.subheader("Reinforcement and ACI PMM Settings")
+        det1, det2, det3, det4, det5 = st.columns(5)
         cover_mm = det1.number_input("Clear cover [mm]", min_value=40, max_value=150, value=75, step=5)
         main_bar = det2.selectbox("Main bar", list(REBAR_DB.keys()), index=2)
         tie_bar = det3.selectbox("Tie / spiral bar", list(REBAR_DB.keys()), index=1)
         tie_spacing_mm = det4.number_input("Provided tie spacing [mm]", min_value=50, max_value=400, value=150, step=10)
+        transverse_system = det5.selectbox("Transverse system", ["Tied", "Spiral"], index=0)
 
         if pile_type == "Round":
             cfg1, cfg2 = st.columns(2)
-            n_main_bars = cfg1.number_input("Number of main bars", min_value=4, max_value=40, value=10, step=1)
-            n_tie_legs = cfg2.number_input("Equivalent tie legs", min_value=2, max_value=8, value=2, step=1)
+            n_main_bars = cfg1.number_input("Number of main bars", min_value=4, max_value=60, value=10, step=1)
+            n_tie_legs = cfg2.number_input("Equivalent tie legs", min_value=2, max_value=12, value=2, step=1)
             n_b_face = n_h_face = None
         else:
             cfg1, cfg2, cfg3 = st.columns(3)
-            n_b_face = cfg1.number_input("Bars on B face", min_value=2, max_value=20, value=4, step=1)
-            n_h_face = cfg2.number_input("Bars on H face", min_value=2, max_value=20, value=4, step=1)
-            n_tie_legs = cfg3.number_input("Tie legs", min_value=2, max_value=8, value=2, step=1)
+            n_b_face = cfg1.number_input("Bars on B face", min_value=2, max_value=30, value=4, step=1)
+            n_h_face = cfg2.number_input("Bars on H face", min_value=2, max_value=30, value=4, step=1)
+            n_tie_legs = cfg3.number_input("Tie legs", min_value=2, max_value=12, value=2, step=1)
             n_main_bars = None
 
-        if spring_source == "Global average spring":
-            spring_df = df_results.copy()
-            spring_k = (
-                spring_df["Ksx [kN/m]"].to_numpy(dtype=float)
-                if design_direction == "X"
-                else spring_df["Ksy [kN/m]"].to_numpy(dtype=float)
-            )
-            spring_note = f"Using {'Ksx' if design_direction == 'X' else 'Ksy'} from the global average spring table."
+        run_col, note_col = st.columns([1.0, 2.2])
+        if run_col.button("Run / Update Pile Design", type="primary", use_container_width=True):
+            st.session_state["pile_design_has_run"] = True
+        note_col.caption("PMM interaction and force diagrams are calculated only after running this design step.")
+        design_has_run = bool(st.session_state.get("pile_design_has_run", False))
+        if not design_has_run:
+            st.info("Click **Run / Update Pile Design** after editing load cases or reinforcement.")
+            active_cases = active_cases.iloc[0:0].copy()
+
+        if active_cases.empty:
+            if design_has_run:
+                st.warning("Add at least one active load case to run pile design.")
         else:
-            spring_df = df_row_results[
-                (df_row_results["Direction"] == design_direction)
-                & (df_row_results["Row No."] == int(design_row))
-            ].sort_values("Node").copy()
-            spring_k = spring_df["Kspring [kN/m]"].to_numpy(dtype=float)
-            if spring_df.empty:
-                spring_note = "No row-based spring data available."
+            if spring_source == "Global average spring":
+                spring_k_x = df_results["Ksx [kN/m]"].to_numpy(dtype=float)
+                spring_k_y = df_results["Ksy [kN/m]"].to_numpy(dtype=float)
+                spring_note = "Using global average Ksx and Ksy spring tables."
             else:
-                row_pos = spring_df["Row Position"].iloc[0]
-                spring_note = f"Using row-based spring for {design_direction} direction, row {design_row} ({row_pos})."
+                spring_df_x = df_row_results[
+                    (df_row_results["Direction"] == "X")
+                    & (df_row_results["Row No."] == int(x_design_row))
+                ].sort_values("Node").copy()
+                spring_df_y = df_row_results[
+                    (df_row_results["Direction"] == "Y")
+                    & (df_row_results["Row No."] == int(y_design_row))
+                ].sort_values("Node").copy()
+                spring_k_x = spring_df_x["Kspring [kN/m]"].to_numpy(dtype=float)
+                spring_k_y = spring_df_y["Kspring [kN/m]"].to_numpy(dtype=float)
+                spring_note = f"Using row-based springs: X row {x_design_row}, Y row {y_design_row}."
 
-        EI = Ep * (Ipy if design_direction == "X" else Ipx)
-        design_ok = len(spring_k) == len(depths) and np.any(np.abs(spring_k) > 1e-9)
-        response_error = None
-        if design_ok:
-            try:
-                disp_m, theta_rad, soil_reaction_kN, shear_kN, moment_kNm = solve_pile_lateral_response(
-                    depths, spring_k, EI, head_shear=Hu_kN, head_moment=Mu_kNm
-                )
-            except Exception as exc:
-                response_error = str(exc)
-                design_ok = False
-        else:
-            response_error = "The selected spring source is empty or does not align with the pile depth nodes."
-
-        st.info(spring_note)
-        if response_error:
-            st.error(f"Pile response analysis could not run: {response_error}")
-        else:
-            axial_kN = np.full(len(depths), float(Pu_kN), dtype=float)
-            design_profile = pd.DataFrame({
-                "Node": np.arange(1, len(depths) + 1),
-                "Depth [m]": depths,
-                "Axial P [kN]": axial_kN,
-                "Shear V [kN]": shear_kN,
-                "Moment M [kN-m]": moment_kNm,
-                "Disp. y [mm]": disp_m * 1000.0,
-                "Soil Reaction [kN]": soil_reaction_kN,
-            })
-
-            Mu_max = float(np.max(np.abs(moment_kNm))) if len(moment_kNm) else 0.0
-            Vu_max = float(np.max(np.abs(shear_kN))) if len(shear_kN) else 0.0
-            ymax_mm = float(np.max(np.abs(disp_m)) * 1000.0) if len(disp_m) else 0.0
-            z_mu = float(depths[np.argmax(np.abs(moment_kNm))]) if len(moment_kNm) else 0.0
-            z_vu = float(depths[np.argmax(np.abs(shear_kN))]) if len(shear_kN) else 0.0
-
-            design_summary = calc_pile_design_summary(
-                pile_type, D, B, H, fc, cover_mm, main_bar, tie_bar,
-                design_direction, Pu_kN, Vu_max, Mu_max, n_main_bars,
-                n_b_face, n_h_face, n_tie_legs, as_ratio_rec
+            st.info(spring_note)
+            spring_ok = (
+                len(spring_k_x) == len(depths)
+                and len(spring_k_y) == len(depths)
+                and np.any(np.abs(spring_k_x) > 1e-9)
+                and np.any(np.abs(spring_k_y) > 1e-9)
             )
-            tie_ok = float(tie_spacing_mm) <= float(design_summary["s_rec_mm"]) + 1e-9
-
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Max |M| [kN-m]", f"{Mu_max:,.1f}", f"at z = {z_mu:.2f} m")
-            m2.metric("Max |V| [kN]", f"{Vu_max:,.1f}", f"at z = {z_vu:.2f} m")
-            m3.metric("Axial Pu [kN]", f"{Pu_kN:,.1f}")
-            m4.metric("Max |y| [mm]", f"{ymax_mm:,.2f}")
-
-            left_design, right_design = st.columns([1.15, 1.0], gap="large")
-            with left_design:
-                st.subheader("Pile Section with Reinforcement")
-                st.plotly_chart(
-                    pile_rebar_section_figure(
-                        pile_type, D, B, H, cover_mm, tie_bar, main_bar,
-                        n_round_bars=n_main_bars, n_b_face=n_b_face, n_h_face=n_h_face
-                    ),
-                    use_container_width=True
+            if not spring_ok:
+                st.error("The selected spring source is empty or does not align with the pile depth nodes.")
+            else:
+                pmm_df, bar_df = build_aci_pmm_interaction(
+                    pile_type, D, B, H, fc, cover_mm, tie_bar, main_bar,
+                    n_main_bars=n_main_bars, n_b_face=n_b_face, n_h_face=n_h_face,
+                    transverse_system=transverse_system
                 )
-                section_info = [
-                    ("Main bar", f"{design_summary['total_main_bars']} {main_bar}", f"fy = {design_summary['fy_main']:.0f} MPa"),
-                    ("Provided As", f"{design_summary['as_provided_mm2']:,.0f} mm2", f"{design_summary['as_provided_mm2'] / 100.0:,.1f} cm2"),
-                    ("Required As", f"{design_summary['as_req_total_mm2']:,.0f} mm2", f"{design_summary['as_req_total_mm2'] / 100.0:,.1f} cm2"),
-                    ("Tie bar", tie_bar, f"fy = {design_summary['fy_tie']:.0f} MPa"),
-                    ("Recommended tie spacing", f"{design_summary['s_rec_mm']:.0f} mm", f"provided = {tie_spacing_mm:.0f} mm"),
-                ]
-                st.table(pd.DataFrame(section_info, columns=["Item", "Value", "Note"]))
+                mx_curve = uniaxial_interaction_curve(pmm_df, "Mx")
+                my_curve = uniaxial_interaction_curve(pmm_df, "My")
 
-            with right_design:
-                st.subheader("Preliminary Design Check")
-                ck1, ck2 = st.columns(2)
-                ck1.metric(
-                    "Main bars",
-                    "OK" if design_summary["main_ok"] else "Increase bars",
-                    f"As prov / req = {design_summary['as_provided_mm2'] / max(design_summary['as_req_total_mm2'], 1e-6):.2f}"
-                )
-                ck2.metric(
-                    "Tie spacing",
-                    "OK" if tie_ok else "Tighter spacing",
-                    f"Rec. <= {design_summary['s_rec_mm']:.0f} mm"
-                )
-                st.markdown(
-                    f"""
-                    - **Main bar steel:** `{design_summary['total_main_bars']} {main_bar}`
-                    - **Provided main steel:** `{design_summary['as_provided_mm2']:,.0f} mm2`
-                    - **Minimum steel from spring guide:** `{design_summary['as_min_mm2']:,.0f} mm2`
-                    - **Axial steel demand:** `{design_summary['as_req_axial_mm2']:,.0f} mm2`
-                    - **Flexural steel demand:** `{design_summary['as_req_flex_mm2']:,.0f} mm2`
-                    - **Effective depth d:** `{design_summary['d_eff_mm']:.0f} mm`
-                    - **Concrete shear strength Vc:** `{design_summary['vc_n'] / 1000.0:,.1f} kN`
-                    """
-                )
-                st.caption(design_summary["shear_status"])
-                if not design_summary["main_ok"]:
-                    st.warning("Provided main reinforcement is below the preliminary requirement. Increase bar size or quantity.")
-                if not tie_ok:
-                    st.warning("Provided tie spacing is larger than the preliminary recommended spacing.")
+                profile_frames = []
+                summary_rows = []
+                response_error = None
+                EI_x_loading = Ep * Ipy
+                EI_y_loading = Ep * Ipx
 
-            st.subheader("Pile Force Diagrams")
-            g1, g2, g3 = st.columns(3)
+                for case_idx, case in active_cases.iterrows():
+                    lc = str(case["Load Case"])
+                    pu_kN = float(case["Pu [kN]"])
+                    hx_kN = float(case["Hx [kN]"])
+                    hy_kN = float(case["Hy [kN]"])
+                    try:
+                        disp_x, theta_x, soil_rx, shear_x, moment_y = solve_pile_lateral_response(
+                            depths, spring_k_x, EI_x_loading, head_shear=hx_kN, head_moment=0.0
+                        )
+                        disp_y, theta_y, soil_ry, shear_y, moment_x = solve_pile_lateral_response(
+                            depths, spring_k_y, EI_y_loading, head_shear=hy_kN, head_moment=0.0
+                        )
+                    except Exception as exc:
+                        response_error = f"{lc}: {exc}"
+                        break
 
-            fig_axial = go.Figure()
-            fig_axial.add_trace(go.Scatter(
-                x=design_profile["Axial P [kN]"],
-                y=design_profile["Depth [m]"],
-                mode="lines+markers",
-                line=dict(color="#2c7fb8", width=2),
-                marker=dict(size=5),
-                name="P"
-            ))
-            fig_axial.update_layout(
-                height=420,
-                margin=dict(l=10, r=10, t=40, b=10),
-                yaxis=dict(autorange="reversed", title="Depth [m]"),
-                xaxis=dict(title="Axial Compression P [kN]"),
-                title=dict(text="Axial Force Along Pile", font=dict(size=14))
-            )
-            g1.plotly_chart(fig_axial, use_container_width=True)
+                    axial = np.full(len(depths), pu_kN, dtype=float)
+                    shear_resultant = np.sqrt(shear_x**2 + shear_y**2)
+                    moment_resultant = np.sqrt(moment_x**2 + moment_y**2)
+                    frame = pd.DataFrame({
+                        "Load Case": lc,
+                        "Depth [m]": depths,
+                        "Pu [kN]": axial,
+                        "Vx [kN]": shear_x,
+                        "Vy [kN]": shear_y,
+                        "V resultant [kN]": shear_resultant,
+                        "Mux [kN-m]": moment_x,
+                        "Muy [kN-m]": moment_y,
+                        "M resultant [kN-m]": moment_resultant,
+                        "Disp X [mm]": disp_x * 1000.0,
+                        "Disp Y [mm]": disp_y * 1000.0,
+                        "Soil Rx [kN]": soil_rx,
+                        "Soil Ry [kN]": soil_ry,
+                    })
+                    profile_frames.append(frame)
 
-            fig_m = go.Figure()
-            fig_m.add_trace(go.Scatter(
-                x=design_profile["Moment M [kN-m]"],
-                y=design_profile["Depth [m]"],
-                mode="lines+markers",
-                line=dict(color="#d95f0e", width=2),
-                marker=dict(size=5),
-                fill="tozerox",
-                fillcolor="rgba(217,95,14,0.10)",
-                name="M"
-            ))
-            fig_m.update_layout(
-                height=420,
-                margin=dict(l=10, r=10, t=40, b=10),
-                yaxis=dict(autorange="reversed", title="Depth [m]"),
-                xaxis=dict(title="Moment M [kN-m]"),
-                title=dict(text="Bending Moment Along Pile", font=dict(size=14))
-            )
-            g2.plotly_chart(fig_m, use_container_width=True)
+                    mcap_x = moment_capacity_at_p(mx_curve, pu_kN)
+                    mcap_y = moment_capacity_at_p(my_curve, pu_kN)
+                    util_profile = (
+                        np.abs(moment_x) / max(mcap_x, 1e-9)
+                        + np.abs(moment_y) / max(mcap_y, 1e-9)
+                    )
+                    util_profile = np.where(np.isfinite(util_profile), util_profile, np.inf)
+                    imx = int(np.argmax(np.abs(moment_x))) if len(moment_x) else 0
+                    imy = int(np.argmax(np.abs(moment_y))) if len(moment_y) else 0
+                    iv = int(np.argmax(np.abs(shear_resultant))) if len(shear_resultant) else 0
+                    iu = int(np.argmax(util_profile)) if len(util_profile) else 0
+                    summary_rows.append({
+                        "Load Case": lc,
+                        "Max Pu [kN]": float(np.max(axial)),
+                        "Min Pu [kN]": float(np.min(axial)),
+                        "Max |Mux| [kN-m]": float(np.max(np.abs(moment_x))),
+                        "z @ Mux [m]": float(depths[imx]),
+                        "Max |Muy| [kN-m]": float(np.max(np.abs(moment_y))),
+                        "z @ Muy [m]": float(depths[imy]),
+                        "Max |V| [kN]": float(np.max(np.abs(shear_resultant))),
+                        "z @ V [m]": float(depths[iv]),
+                        "PMM Util.": float(np.max(util_profile)),
+                        "z @ PMM [m]": float(depths[iu]),
+                        "Mx cap @ Pu [kN-m]": mcap_x,
+                        "My cap @ Pu [kN-m]": mcap_y,
+                    })
 
-            fig_v = go.Figure()
-            fig_v.add_trace(go.Scatter(
-                x=design_profile["Shear V [kN]"],
-                y=design_profile["Depth [m]"],
-                mode="lines+markers",
-                line=dict(color="#31a354", width=2),
-                marker=dict(size=5),
-                fill="tozerox",
-                fillcolor="rgba(49,163,84,0.10)",
-                name="V"
-            ))
-            fig_v.update_layout(
-                height=420,
-                margin=dict(l=10, r=10, t=40, b=10),
-                yaxis=dict(autorange="reversed", title="Depth [m]"),
-                xaxis=dict(title="Shear V [kN]"),
-                title=dict(text="Shear Force Along Pile", font=dict(size=14))
-            )
-            g3.plotly_chart(fig_v, use_container_width=True)
+                if response_error:
+                    st.error(f"Pile response analysis could not run: {response_error}")
+                else:
+                    profile_df = pd.concat(profile_frames, ignore_index=True)
+                    demand_df = pd.DataFrame(summary_rows)
+                    max_util = float(demand_df["PMM Util."].max()) if not demand_df.empty else np.inf
+                    governing = demand_df.loc[demand_df["PMM Util."].idxmax()] if not demand_df.empty else None
+                    overall_pu_max = float(demand_df["Max Pu [kN]"].max())
+                    overall_pu_min = float(demand_df["Min Pu [kN]"].min())
+                    overall_mx = float(demand_df["Max |Mux| [kN-m]"].max())
+                    overall_my = float(demand_df["Max |Muy| [kN-m]"].max())
+                    overall_v = float(demand_df["Max |V| [kN]"].max())
+                    overall_m = float(np.sqrt(overall_mx**2 + overall_my**2))
 
-            with st.expander("Detailed pile design table", expanded=False):
-                st.dataframe(
-                    design_profile.style.format({
-                        "Depth [m]": "{:.2f}",
-                        "Axial P [kN]": "{:,.1f}",
-                        "Shear V [kN]": "{:,.1f}",
-                        "Moment M [kN-m]": "{:,.1f}",
-                        "Disp. y [mm]": "{:,.3f}",
-                        "Soil Reaction [kN]": "{:,.1f}",
-                    }),
-                    use_container_width=True,
-                    height=420
-                )
+                    shear_summary = calc_pile_design_summary(
+                        pile_type, D, B, H, fc, cover_mm, main_bar, tie_bar,
+                        "X", max(overall_pu_max, 0.0), overall_v, overall_m,
+                        n_main_bars, n_b_face, n_h_face, n_tie_legs, as_ratio_rec
+                    )
+                    tie_ok = float(tie_spacing_mm) <= float(shear_summary["s_rec_mm"]) + 1e-9
 
-            with st.expander("Design assumptions and workflow", expanded=False):
-                st.markdown(
-                    """
-                    1. This section uses the already-calculated lateral spring profile from the main spring analysis.
-                    2. Axial compression is treated as constant along pile length from the applied `Pu`.
-                    3. Shear and moment are obtained from a free-head Winkler beam model using the selected spring source.
-                    4. Main bar demand is checked with a simplified axial-plus-flexure estimate and the recommended steel ratio from the spring stiffness guide.
-                    5. Tie spacing is checked with a preliminary ACI-style shear calculation and confinement spacing limit.
-                    6. Final pile design should still be confirmed with project-specific load combinations, interaction checks, detailing rules, and code provisions.
-                    """
-                )
+                    st.subheader("Design Envelope")
+                    env1, env2, env3, env4, env5 = st.columns(5)
+                    env1.metric("Max Pu [kN]", f"{overall_pu_max:,.1f}")
+                    env2.metric("Min Pu [kN]", f"{overall_pu_min:,.1f}")
+                    env3.metric("Max |Mux| [kN-m]", f"{overall_mx:,.1f}")
+                    env4.metric("Max |Muy| [kN-m]", f"{overall_my:,.1f}")
+                    env5.metric("Max PMM Util.", f"{max_util:,.2f}", "OK" if max_util <= 1.0 else "Increase steel")
+
+                    left_design, right_design = st.columns([1.05, 1.15], gap="large")
+                    with left_design:
+                        st.subheader("Pile Section with Reinforcement")
+                        st.plotly_chart(
+                            pile_rebar_section_figure(
+                                pile_type, D, B, H, cover_mm, tie_bar, main_bar,
+                                n_round_bars=n_main_bars, n_b_face=n_b_face, n_h_face=n_h_face
+                            ),
+                            use_container_width=True
+                        )
+                        section_info = [
+                            ("Main bar", f"{len(bar_df)} {main_bar}", f"fy = {get_rebar_fy_mpa(main_bar):.0f} MPa"),
+                            ("Provided As", f"{bar_df['As_mm2'].sum():,.0f} mm2", f"{bar_df['As_mm2'].sum() / 100.0:,.1f} cm2"),
+                            ("Transverse system", transverse_system, f"{tie_bar} @ {tie_spacing_mm:.0f} mm"),
+                            ("PMM interaction", "OK" if max_util <= 1.0 else "NG", f"governing = {governing['Load Case'] if governing is not None else '-'}"),
+                            ("Recommended tie spacing", f"{shear_summary['s_rec_mm']:.0f} mm", "preliminary shear/confinement check"),
+                        ]
+                        st.table(pd.DataFrame(section_info, columns=["Item", "Value", "Note"]))
+                        if max_util > 1.0:
+                            st.warning("PMM utilization exceeds 1.0. Increase main bar size/quantity or revise the section.")
+                        if not tie_ok:
+                            st.warning("Provided tie spacing is larger than the preliminary recommended spacing.")
+
+                    with right_design:
+                        st.subheader("Load Case Results")
+                        st.dataframe(
+                            demand_df.style.format({
+                                "Max Pu [kN]": "{:,.1f}",
+                                "Min Pu [kN]": "{:,.1f}",
+                                "Max |Mux| [kN-m]": "{:,.1f}",
+                                "z @ Mux [m]": "{:.2f}",
+                                "Max |Muy| [kN-m]": "{:,.1f}",
+                                "z @ Muy [m]": "{:.2f}",
+                                "Max |V| [kN]": "{:,.1f}",
+                                "z @ V [m]": "{:.2f}",
+                                "PMM Util.": "{:.3f}",
+                                "z @ PMM [m]": "{:.2f}",
+                                "Mx cap @ Pu [kN-m]": "{:,.1f}",
+                                "My cap @ Pu [kN-m]": "{:,.1f}",
+                            }),
+                            use_container_width=True,
+                            hide_index=True,
+                            height=260
+                        )
+                        st.markdown(
+                            f"""
+                            - **Provided main steel:** `{bar_df['As_mm2'].sum():,.0f} mm2`
+                            - **Maximum shear resultant:** `{overall_v:,.1f} kN`
+                            - **Recommended tie spacing:** `{shear_summary['s_rec_mm']:.0f} mm`
+                            - **PMM check:** linear biaxial load-contour utilization using ACI-style uniaxial strain-compatible curves.
+                            """
+                        )
+
+                    st.subheader("Force Diagrams Along Pile")
+                    symbols = ["circle", "square", "diamond", "triangle-up", "cross", "x", "star", "hexagon", "triangle-down", "pentagon"]
+                    colors = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22"]
+
+                    def _force_figure(x_col, title, x_title):
+                        fig = go.Figure()
+                        for i, (lc, grp) in enumerate(profile_df.groupby("Load Case", sort=False)):
+                            fig.add_trace(go.Scatter(
+                                x=grp[x_col],
+                                y=grp["Depth [m]"],
+                                mode="lines+markers",
+                                name=str(lc),
+                                line=dict(color=colors[i % len(colors)], width=2),
+                                marker=dict(symbol=symbols[i % len(symbols)], size=7),
+                            ))
+                        fig.update_layout(
+                            height=410,
+                            margin=dict(l=10, r=10, t=45, b=10),
+                            title=dict(text=title, font=dict(size=14)),
+                            yaxis=dict(autorange="reversed", title="Depth [m]"),
+                            xaxis=dict(title=x_title, zeroline=True, zerolinecolor="rgba(60,60,60,0.45)"),
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                        )
+                        return fig
+
+                    fd1, fd2 = st.columns(2)
+                    fd3, fd4 = st.columns(2)
+                    fd1.plotly_chart(_force_figure("Pu [kN]", "Axial Force P", "Compression P [kN]"), use_container_width=True)
+                    fd2.plotly_chart(_force_figure("Mux [kN-m]", "Bending Moment About X", "Mux [kN-m]"), use_container_width=True)
+                    fd3.plotly_chart(_force_figure("Muy [kN-m]", "Bending Moment About Y", "Muy [kN-m]"), use_container_width=True)
+                    fd4.plotly_chart(_force_figure("V resultant [kN]", "Shear Force Resultant", "V = sqrt(Vx^2 + Vy^2) [kN]"), use_container_width=True)
+
+                    st.subheader("ACI PMM Interaction")
+                    pm1, pm2 = st.columns(2)
+
+                    def _pm_curve_figure(curve_df, moment_col_title, demand_col, title):
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(
+                            x=curve_df["phiM [kN-m]"],
+                            y=curve_df["phiPn [kN]"],
+                            mode="markers",
+                            marker=dict(size=4, color="#1a4f8a", opacity=0.55),
+                            name="phi capacity"
+                        ))
+                        for i, row in demand_df.iterrows():
+                            fig.add_trace(go.Scatter(
+                                x=[row[demand_col]],
+                                y=[row["Max Pu [kN]"]],
+                                mode="markers+text",
+                                marker=dict(size=11, symbol=symbols[i % len(symbols)], color=colors[i % len(colors)]),
+                                text=[row["Load Case"]],
+                                textposition="top center",
+                                name=row["Load Case"],
+                                showlegend=False,
+                            ))
+                        fig.update_layout(
+                            height=430,
+                            margin=dict(l=10, r=10, t=45, b=10),
+                            title=dict(text=title, font=dict(size=14)),
+                            xaxis=dict(title=moment_col_title),
+                            yaxis=dict(title="phi Pn [kN]"),
+                        )
+                        return fig
+
+                    pm1.plotly_chart(
+                        _pm_curve_figure(mx_curve, "phi Mnx [kN-m]", "Max |Mux| [kN-m]", "P-Mx Interaction"),
+                        use_container_width=True
+                    )
+                    pm2.plotly_chart(
+                        _pm_curve_figure(my_curve, "phi Mny [kN-m]", "Max |Muy| [kN-m]", "P-My Interaction"),
+                        use_container_width=True
+                    )
+
+                    show_3d_pmm = st.checkbox(
+                        "Show 3D PMM point cloud",
+                        value=False,
+                        help="The 3D PMM plot is useful for review but can be heavier to render."
+                    )
+                    if show_3d_pmm:
+                        fig_pmm = go.Figure()
+                        fig_pmm.add_trace(go.Scatter3d(
+                            x=pmm_df["phiMnx [kN-m]"],
+                            y=pmm_df["phiMny [kN-m]"],
+                            z=pmm_df["phiPn [kN]"],
+                            mode="markers",
+                            marker=dict(size=2, color=pmm_df["phiPn [kN]"], colorscale="Viridis", opacity=0.35),
+                            name="PMM capacity"
+                        ))
+                        for i, row in demand_df.iterrows():
+                            fig_pmm.add_trace(go.Scatter3d(
+                                x=[row["Max |Mux| [kN-m]"]],
+                                y=[row["Max |Muy| [kN-m]"]],
+                                z=[row["Max Pu [kN]"]],
+                                mode="markers+text",
+                                marker=dict(size=6, symbol="circle", color=colors[i % len(colors)]),
+                                text=[row["Load Case"]],
+                                textposition="top center",
+                                name=row["Load Case"],
+                            ))
+                        fig_pmm.update_layout(
+                            height=560,
+                            margin=dict(l=0, r=0, t=45, b=0),
+                            title=dict(text="PMM Interaction Point Cloud", font=dict(size=14)),
+                            scene=dict(
+                                xaxis_title="phi Mnx [kN-m]",
+                                yaxis_title="phi Mny [kN-m]",
+                                zaxis_title="phi Pn [kN]",
+                            ),
+                        )
+                        st.plotly_chart(fig_pmm, use_container_width=True)
+
+                    with st.expander("Detailed force table", expanded=False):
+                        st.dataframe(
+                            profile_df.style.format({
+                                "Depth [m]": "{:.2f}",
+                                "Pu [kN]": "{:,.1f}",
+                                "Vx [kN]": "{:,.1f}",
+                                "Vy [kN]": "{:,.1f}",
+                                "V resultant [kN]": "{:,.1f}",
+                                "Mux [kN-m]": "{:,.1f}",
+                                "Muy [kN-m]": "{:,.1f}",
+                                "M resultant [kN-m]": "{:,.1f}",
+                                "Disp X [mm]": "{:,.3f}",
+                                "Disp Y [mm]": "{:,.3f}",
+                                "Soil Rx [kN]": "{:,.1f}",
+                                "Soil Ry [kN]": "{:,.1f}",
+                            }),
+                            use_container_width=True,
+                            height=420
+                        )
+
+                    with st.expander("PMM assumptions and workflow", expanded=False):
+                        st.markdown(
+                            """
+                            1. `Pu` is compression-positive and is held constant along the pile for each load case.
+                            2. `Hx` produces lateral response in X and bending moment about the Y-axis (`Muy`).
+                            3. `Hy` produces lateral response in Y and bending moment about the X-axis (`Mux`).
+                            4. PMM capacity is generated by ACI 318-style strain compatibility using a Whitney stress block, steel yielding, and phi factors from tensile strain.
+                            5. The biaxial PMM utilization shown is a preliminary linear load-contour check from the uniaxial P-Mx and P-My capacities at the same `Pu`.
+                            6. Final design should still be verified with the governing ACI edition, project load combinations, slenderness/detailing requirements, and independent engineering review.
+                            """
+                        )
 
         st.divider()
 with tab5:
