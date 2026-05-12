@@ -1034,6 +1034,15 @@ def uniaxial_interaction_curve(pmm_df, axis):
     if selected.empty:
         selected = pmm_df.copy()
         m_col = "phiMnx [kN-m]" if axis == "Mx" else "phiMny [kN-m]"
+
+    axial_anchor = pmm_df[
+        pmm_df["Angle [deg]"].isna()
+        & np.isclose(pmm_df["phiMnx [kN-m]"], 0.0)
+        & np.isclose(pmm_df["phiMny [kN-m]"], 0.0)
+    ].copy()
+    if not axial_anchor.empty:
+        selected = pd.concat([selected, axial_anchor], ignore_index=True)
+
     return pd.DataFrame({
         "phiPn [kN]": selected["phiPn [kN]"],
         "phiM [kN-m]": selected[m_col].abs(),
@@ -1063,8 +1072,33 @@ def interaction_curve_envelope(curve_df):
     curve = curve[np.isfinite(curve["phiPn [kN]"]) & np.isfinite(curve["phiM [kN-m]"])]
     if curve.empty:
         return pd.DataFrame(columns=["phiPn [kN]", "phiM [kN-m]"])
-    curve = curve.groupby(curve["phiPn [kN]"].round(1), as_index=False)["phiM [kN-m]"].max()
-    return curve.sort_values("phiPn [kN]").reset_index(drop=True)
+
+    body = curve.groupby(curve["phiPn [kN]"].round(1), as_index=False)["phiM [kN-m]"].max()
+    body = body.rename(columns={"index": "phiPn [kN]"}) if "index" in body.columns else body
+
+    axial_points = curve[np.isclose(curve["phiM [kN-m]"], 0.0)].copy()
+    if not axial_points.empty:
+        axial_points = pd.DataFrame([
+            axial_points.loc[axial_points["phiPn [kN]"].idxmin()],
+            axial_points.loc[axial_points["phiPn [kN]"].idxmax()],
+        ])
+        axial_points["phiPn [kN]"] = axial_points["phiPn [kN]"].round(1)
+        curve = pd.concat([body, axial_points[["phiPn [kN]", "phiM [kN-m]"]]], ignore_index=True)
+    else:
+        curve = body
+
+    p_min = float(curve["phiPn [kN]"].min())
+    p_max = float(curve["phiPn [kN]"].max())
+    curve["p_key"] = curve["phiPn [kN]"].round(1)
+    curve["m_sort"] = curve["phiM [kN-m]"]
+    curve.loc[np.isclose(curve["phiPn [kN]"], p_max), "m_sort"] = -curve["phiM [kN-m]"]
+    curve.loc[np.isclose(curve["phiPn [kN]"], p_min), "m_sort"] = curve["phiM [kN-m]"]
+
+    return (
+        curve.sort_values(["phiPn [kN]", "m_sort"])
+        .drop(columns=["p_key", "m_sort"])
+        .reset_index(drop=True)
+    )
 
 def pmm_slice_at_p(pmm_df, pu_kN):
     """Interpolate an Mx-My capacity slice at a constant factored axial load."""
