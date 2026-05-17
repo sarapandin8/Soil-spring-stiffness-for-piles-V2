@@ -7,7 +7,7 @@ import json
 
 st.set_page_config(page_title="Pile Soil Spring Calculator", layout="wide", page_icon="P")
 
-VERSION = 9  # bumped: bug-fix Upload + UX improvements
+VERSION = 10  # bumped: engineering bug fixes + PMM/soil validation improvements
 
 #  CONSTANTS
 WIDGET_KEYS = [
@@ -280,7 +280,7 @@ def calc_kh_vesic(Es_kPa, D, Ep, Ip, nu=0.35):
     return 0.65 * (Es * D**4 / (Ep * Ip))**(1/12) * Es / (D * (1 - nu**2))
 
 def calc_kh_broms(soil_type, N, z, D, gamma_eff=8, phi=None, cu=None):
-    """Broms (1964) ultimate lateral resistance โ’ secant kh at y=0.01D"""
+    """Broms (1964) ultimate lateral resistance -> secant kh at y=0.01D"""
     y_ref = 0.01 * D
     z_use = max(z, 0.1)
     if soil_type == "Sand":
@@ -314,7 +314,7 @@ def get_rebar_fy_mpa(bar_name):
     return float(REBAR_DB[bar_name]["fy_mpa"])
 
 def calc_pile_props(pile_type, D, B, H, fc):
-    """Concrete pile properties. Ep = 4700โfc (MPa) โ’ kN/mยฒ"""
+    """Concrete pile properties. Ep = 4700sqrtfc (MPa) -> kN/m2"""
     Ep = 4700 * np.sqrt(fc) * 1000
     if pile_type == "Round":
         Ap = np.pi * D**2 / 4
@@ -380,7 +380,7 @@ def solve_pile_lateral_response(depths, spring_k, EI, head_shear=0.0, head_momen
     return y, theta, reactions, shear, moment
 
 def calc_kv_tip(N_tip, D, Ap, design_stage):
-    """Vertical tip spring (JRA) Kv_tip = (E0/B0)(D/B0)^(-3/4)/3 ร— Ap"""
+    """Vertical tip spring (JRA) Kv_tip = (E0/B0)(D/B0)^(-3/4)/3 x Ap"""
     B0 = 0.3
     E0_factor = 5600 if design_stage == "Seismic" else 2800
     E0 = E0_factor * N_tip
@@ -410,13 +410,25 @@ def calc_tributary_lengths(depths, L):
     return np.asarray(tribs, dtype=float)
 
 def draw_spring(x0, x1, y, n_coils=7):
-    """Zigzag spring symbol between x0 and x1 at depth y"""
+    """Zigzag spring symbol between x0 and x1 at depth y.
+
+    The x-coordinate progression follows the sign of (x1 - x0), so the
+    spring is drawn correctly for both left-to-right and right-to-left calls.
+    """
     length = abs(x1 - x0)
+    if length <= 0 or n_coils <= 0:
+        return [x0, x1], [y, y]
+    direction = 1 if x1 >= x0 else -1
     dx = length / (n_coils * 4)
     xs = [x0]
     ys = [y]
     for i in range(n_coils):
-        xs += [x0 + dx*(4*i+1), x0 + dx*(4*i+2), x0 + dx*(4*i+3), x0 + dx*(4*i+4)]
+        xs += [
+            x0 + direction * dx * (4*i + 1),
+            x0 + direction * dx * (4*i + 2),
+            x0 + direction * dx * (4*i + 3),
+            x0 + direction * dx * (4*i + 4),
+        ]
         ys += [y + dx, y - dx, y + dx, y]
     return xs, ys
 
@@ -442,7 +454,26 @@ def validate_soil_profile(df):
                     msgs.append(f"Gap between rows {i} and {i+1}: {prev_to:.1f} to {curr_from:.1f} m.")
                 else:
                     msgs.append(f"Overlap between rows {i} and {i+1}: {curr_from:.1f} < {prev_to:.1f} m.")
+
+    # Validate Soil_Type and Consistency pairing. This prevents using a Clay row
+    # with a Sand consistency, or vice versa, which can leave stale cu/phi/Es
+    # values in the calculation table.
+    for enum_i, (_, row) in enumerate(df_valid.iterrows(), start=1):
+        stype = str(row.get("Soil_Type", "") or "").strip()
+        cons = str(row.get("Consistency", "") or "").strip()
+        if stype and cons:
+            valid_cons = SOIL_DB.get(stype, {})
+            if stype not in SOIL_DB:
+                msgs.append(f"Row {enum_i}: Soil_Type '{stype}' is not supported. Use Clay or Sand.")
+            elif cons not in valid_cons:
+                opts = ", ".join(valid_cons.keys())
+                msgs.append(
+                    f"Row {enum_i}: Consistency '{cons}' is not valid for {stype}. "
+                    f"Valid options: {opts}."
+                )
     return msgs
+
+
 def autofill_soil_row(row_dict):
     """Fill a soil row from SOIL_DB when Soil_Type and Consistency are known."""
     stype = str(row_dict.get("Soil_Type", "") or "")
@@ -991,20 +1022,24 @@ def build_aci_pmm_interaction(
         ast = float(bars["As_mm2"].sum())
         fy_ref = float(bars["fy_mpa"].max())
         phi_tension = 0.90
+        phi_compression = 0.75 if transverse_system == "Spiral" else 0.65
+        axial_cap_factor = 0.85 if transverse_system == "Spiral" else 0.80
+        po_n = 0.85 * fc_mpa * max(exact_area - ast, 0.0) + fy_ref * ast
+        phi_pn_max_kN = axial_cap_factor * phi_compression * po_n / 1000.0
         df = pd.concat([
             df,
             pd.DataFrame([{
                 "Angle [deg]": np.nan,
                 "c [mm]": np.inf,
-                "Pn [kN]": df["phiPnMax [kN]"].max() / (0.75 if transverse_system == "Spiral" else 0.65),
+                "Pn [kN]": po_n / 1000.0,
                 "Mx [kN-m]": 0.0,
                 "My [kN-m]": 0.0,
-                "phi": 0.75 if transverse_system == "Spiral" else 0.65,
-                "phiPn [kN]": df["phiPnMax [kN]"].max(),
+                "phi": phi_compression,
+                "phiPn [kN]": phi_pn_max_kN,
                 "phiMnx [kN-m]": 0.0,
                 "phiMny [kN-m]": 0.0,
                 "eps_t": 0.0,
-                "phiPnMax [kN]": df["phiPnMax [kN]"].max(),
+                "phiPnMax [kN]": phi_pn_max_kN,
             }, {
                 "Angle [deg]": np.nan,
                 "c [mm]": 0.0,
@@ -1016,7 +1051,7 @@ def build_aci_pmm_interaction(
                 "phiMnx [kN-m]": 0.0,
                 "phiMny [kN-m]": 0.0,
                 "eps_t": 0.005,
-                "phiPnMax [kN]": df["phiPnMax [kN]"].max(),
+                "phiPnMax [kN]": phi_pn_max_kN,
             }])
         ], ignore_index=True)
     return df, bars
@@ -1145,14 +1180,13 @@ def pmm_slice_at_p(pmm_df, pu_kN):
         }).sort_values("phiPn [kN]")
         p_vals = grouped["phiPn [kN]"].to_numpy(dtype=float)
         if pu_kN < p_vals.min() or pu_kN > p_vals.max():
-            nearest = grouped.iloc[(grouped["phiPn [kN]"] - pu_kN).abs().argmin()]
-            mx = float(nearest["phiMnx [kN-m]"])
-            my = float(nearest["phiMny [kN-m]"])
-            p_use = float(nearest["phiPn [kN]"])
-        else:
-            mx = float(np.interp(pu_kN, p_vals, grouped["phiMnx [kN-m]"].to_numpy(dtype=float)))
-            my = float(np.interp(pu_kN, p_vals, grouped["phiMny [kN-m]"].to_numpy(dtype=float)))
-            p_use = float(pu_kN)
+            # Do not silently substitute a nearest point outside the available
+            # axial range. A constant-Pu slice must be interpolated only from
+            # angles that actually bracket the requested Pu.
+            continue
+        mx = float(np.interp(pu_kN, p_vals, grouped["phiMnx [kN-m]"].to_numpy(dtype=float)))
+        my = float(np.interp(pu_kN, p_vals, grouped["phiMny [kN-m]"].to_numpy(dtype=float)))
+        p_use = float(pu_kN)
         rows.append({
             "Angle [deg]": float(angle),
             "phiMnx [kN-m]": mx,
@@ -1457,7 +1491,7 @@ def calc_pile_design_summary(
         "shear_status": shear_status,
     }
 
-def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, D_tip_eq, Ap, Ep, Ipx, Ipy, B, H, L, fc,
+def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, kv_tip, D_tip_eq, Ap, Ep, Ipx, Ipy, B, H, L, fc,
                 node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta, beta_x, beta_y,
                 kh_max_surface, kh_min_deep, as_ratio_rec, As_min, use_group, spring_output):
     """Build Excel file with all calculation results."""
@@ -1520,6 +1554,7 @@ def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, D_tip_eq, Ap
             ("E0 at tip", (2800 if design_stage == "Normal" else 5600) * N_tip, "kN/m2"),
             ("Equivalent circular D for JRA size effect", D_tip_eq, "m"),
             ("Pile tip area Ap", Ap, "m2"),
+            ("kv_tip unit tip modulus", round(kv_tip, 1), "kN/m3"),
             ("Kv_tip vertical spring", round(Kv_tip, 1), "kN/m"),
             ("Design Stage", design_stage, "-"),
         ]
@@ -1549,6 +1584,7 @@ def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, D_tip_eq, Ap
             ("Excel Export", "Global average + row-based sheets", "-"),
             ("Beta X characteristic value [1/m]", round(beta_x, 4), "1/m"),
             ("Beta Y characteristic value [1/m]", round(beta_y, 4), "1/m"),
+            ("kv_tip [kN/m3]", round(kv_tip, 1), "kN/m3"),
             ("Kv_tip [kN/m]", round(Kv_tip, 1), "kN/m"),
         ]
         for ri, (k, v, u) in enumerate(summary):
@@ -1865,14 +1901,14 @@ if len(_df_check) == 0:
     _ready = False
 else:
     _incomplete = []
-    for _i, _row in _df_check.iterrows():
+    for _enum_i, (_i, _row) in enumerate(_df_check.iterrows(), start=1):
         _missing = []
         for _col, _label in _REQUIRED_COLS.items():
             _v = _row.get(_col, None)
             if _v is None or (isinstance(_v, float) and np.isnan(_v)) or str(_v).strip() in ("", "None"):
                 _missing.append(_label)
         if _missing:
-            _row_no = _i + 1
+            _row_no = _enum_i
             _depth_label = f"From {_row.get('Depth_From','?')} m" if not pd.isna(_row.get("Depth_From")) else f"Row {_row_no}"
             _incomplete.append(f"- **{_depth_label}** missing: {', '.join(_missing)}")
 
@@ -1926,9 +1962,9 @@ else:
         soil_type   = layer["Soil_Type"]
         N_val       = float(layer["SPT_N"])
         below_water = z > water_table
-        z_mid       = max(z - node_spacing / 2, 0.05)
+        z_mid       = max(z, 0.05)
 
-        if z < scour_depth:
+        if z <= scour_depth:
             kh_x = kh_y = E0 = 0.0
             pu = np.nan
         else:
@@ -2013,8 +2049,11 @@ else:
             "Row Position", "fm", "Soil_Type", "N-SPT", "kh [kN/m3]",
             "Deq [m]", "Kspring [kN/m]"
         ]]
-    tip_mask = (df_soil_calc["Depth_From"] <= L) & (df_soil_calc["Depth_To"] > L)
-    tip_layer = df_soil_calc[tip_mask].iloc[0] if tip_mask.any() else df_soil_calc.iloc[-1]
+    eps_depth = 1e-9
+    tip_mask = (df_soil_calc["Depth_From"] <= L + eps_depth) & (df_soil_calc["Depth_To"] >= L - eps_depth)
+    # If the pile tip lies exactly on a layer boundary, use the lower layer
+    # where available because the pile tip bears into the material below.
+    tip_layer = df_soil_calc[tip_mask].iloc[-1] if tip_mask.any() else df_soil_calc.iloc[-1]
     N_tip          = float(tip_layer["SPT_N"])
     D_tip_eq = D if pile_is_round else equivalent_circular_diameter_from_area(Ap)
     Kv_tip, kv_tip = calc_kv_tip(N_tip, D_tip_eq, Ap, design_stage)
@@ -2038,7 +2077,7 @@ st.sidebar.header("5. Export")
 if _ready:
     try:
         excel_data = build_excel(
-            df_results, df_row_results, df_soil_draw, N_tip, Kv_tip, D_tip_eq, Ap, Ep, Ipx, Ipy, B, H, L, fc,
+            df_results, df_row_results, df_soil_draw, N_tip, Kv_tip, kv_tip, D_tip_eq, Ap, Ep, Ipx, Ipy, B, H, L, fc,
             node_spacing, method, design_stage, water_table, scour_depth, Pmult, beta, beta_x, beta_y,
             kh_max_surface, kh_min_deep, as_ratio_rec, As_min, use_group, spring_output
         )
