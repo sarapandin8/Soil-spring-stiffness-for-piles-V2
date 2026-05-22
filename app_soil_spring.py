@@ -7,7 +7,7 @@ import json
 
 st.set_page_config(page_title="Pile Soil Spring Calculator", layout="wide", page_icon="P")
 
-VERSION = 13  # bumped: SOIL_DB→Table6.3.2-1, interp_phi/cu_from_N, N-SPT editable with auto interp
+VERSION = 14  # bumped: fix N-SPT edit loop (new_tc sync), NaN guard, SPT_N fillna+step config
 
 #  CONSTANTS
 WIDGET_KEYS = [
@@ -234,7 +234,8 @@ if "_prev_type_cons" not in st.session_state:
 if "_prev_N" not in st.session_state:
     _init = st.session_state.soil_layers
     st.session_state["_prev_N"] = {
-        i: float(r.get("SPT_N", 0) or 0)
+        i: (float(r.get("SPT_N", 0)) if (r.get("SPT_N") is not None
+             and str(r.get("SPT_N", "")) not in ("nan", "None", "")) else 0.0)
         for i, r in _init.iterrows()
     }
 
@@ -1874,6 +1875,9 @@ with tab1:
         for _col in ["Depth_From", "Depth_To", "SPT_N", "Es", "cu", "phi", "Gamma"]:
             if _col in _df_input.columns:
                 _df_input[_col] = pd.to_numeric(_df_input[_col], errors="coerce").astype(float)
+        # BUG FIX 2a: fill NaN in SPT_N so data_editor shows 0 instead of "None"
+        if "SPT_N" in _df_input.columns:
+            _df_input["SPT_N"] = _df_input["SPT_N"].fillna(0.0)
 
         edited_df = st.data_editor(
             _df_input,
@@ -1885,7 +1889,7 @@ with tab1:
                 "Depth_To": st.column_config.NumberColumn("To [m]", format="%.2f", width="small"),
                 "Soil_Type": st.column_config.SelectboxColumn("Type", options=["Clay", "Sand"], width="small"),
                 "Consistency": st.column_config.SelectboxColumn("Consist.", options=all_cons, width="medium"),
-                "SPT_N": st.column_config.NumberColumn("N-SPT", format="%.0f", width="small"),
+                "SPT_N": st.column_config.NumberColumn("N-SPT", format="%.0f", min_value=0.0, step=1.0, width="small", help="Edit N-SPT directly — phi/cu and Consistency update automatically"),
                 "Es": st.column_config.NumberColumn("Es [kPa]", format="%.0f", width="small"),
                 "cu": st.column_config.NumberColumn("cu [kPa]", format="%.1f", width="small"),
                 "phi": st.column_config.NumberColumn("phi [deg]", format="%.1f", width="small"),
@@ -1904,7 +1908,8 @@ with tab1:
         for idx, row in edited_df.iterrows():
             stype   = str(row.get("Soil_Type", "") or "")
             cons    = str(row.get("Consistency", "") or "")
-            curr_N  = float(row.get("SPT_N", 0) or 0)
+            _raw_N  = row.get("SPT_N", 0)
+            curr_N  = float(_raw_N) if (_raw_N is not None and str(_raw_N) not in ("", "nan", "None")) else 0.0
             new_tc[idx] = (stype, cons)
             new_N[idx]  = curr_N
 
@@ -1930,6 +1935,10 @@ with tab1:
                 filled_row, ok = autofill_from_N_change(row.to_dict())
                 if ok:
                     autofilled.loc[idx] = pd.Series(filled_row)
+                    # CRITICAL FIX: update new_tc with the NEW Consistency label
+                    # so next render does NOT see it as type_cons_changed and
+                    # re-trigger a full SOIL_DB autofill that would reset N
+                    new_tc[idx] = (stype, str(filled_row.get("Consistency", cons)))
                     did_fill = True
                     fill_reason = f"phi/cu interpolated from N-SPT = {curr_N:.0f} (Table 6.3.2-1)."
 
