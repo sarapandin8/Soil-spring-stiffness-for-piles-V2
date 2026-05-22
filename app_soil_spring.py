@@ -7,7 +7,7 @@ import json
 
 st.set_page_config(page_title="Pile Soil Spring Calculator", layout="wide", page_icon="P")
 
-VERSION = 10  # bumped: engineering bug fixes + PMM/soil validation improvements
+VERSION = 13  # bumped: SOIL_DB→Table6.3.2-1, interp_phi/cu_from_N, N-SPT editable with auto interp
 
 #  CONSTANTS
 WIDGET_KEYS = [
@@ -20,7 +20,7 @@ def _apply_pending_load():
     """Apply pending JSON project values before Streamlit widgets are created."""
     if "_pending_load" in st.session_state:
         pending = st.session_state.pop("_pending_load")
-        for w in ("soil_editor", "_soil_edited", "_prev_type_cons"):
+        for w in ("soil_editor", "_soil_edited", "_prev_type_cons", "_prev_N"):
             if w in st.session_state:
                 del st.session_state[w]
         for k, v in pending.items():
@@ -33,7 +33,7 @@ def _apply_pending_profile():
         name = st.session_state.pop("_pending_profile")
         if name in SOIL_PROFILES:
             st.session_state.soil_layers = SOIL_PROFILES[name].copy()
-            for w in ("soil_editor", "_soil_edited", "_prev_type_cons"):
+            for w in ("soil_editor", "_soil_edited", "_prev_type_cons", "_prev_N"):
                 if w in st.session_state:
                     del st.session_state[w]
             st.session_state["_just_profile_msg"] = f"Loaded predefined profile: {name}"
@@ -109,19 +109,21 @@ def load_project_from_dict(data):
 #  REFERENCE DATABASE
 SOIL_DB = {
     "Clay": {
-        "Very Soft":       {"N": 1,  "cu": 6,   "Es":  1500, "Gamma": 15, "alpha": 12,  "desc": "N<2,  cu<12 kPa, Bangkok Soft Clay"},
-        "Soft":            {"N": 3,  "cu": 18,  "Es":  3000, "Gamma": 16, "alpha": 24,  "desc": "N=2-4, cu=12-25 kPa"},
-        "Medium Stiff":    {"N": 6,  "cu": 36,  "Es":  8000, "Gamma": 17, "alpha": 48,  "desc": "N=5-8, cu=25-50 kPa"},
-        "Stiff":           {"N": 12, "cu": 72,  "Es": 18000, "Gamma": 18, "alpha": 96,  "desc": "N=9-15, cu=50-100 kPa"},
-        "Very Stiff":      {"N": 25, "cu": 150, "Es": 40000, "Gamma": 19, "alpha": 150, "desc": "N=16-30, cu=100-200 kPa"},
-        "Hard":            {"N": 40, "cu": 250, "Es": 75000, "Gamma": 20, "alpha": 200, "desc": "N>30, cu>200 kPa"},
+        # N ranges & Suc per Table 6.3.2-1 (DRT/DOH standard)
+        "Very Soft":       {"N": 1,  "cu":   7, "Es":  1500, "Gamma": 15, "alpha": 12,  "desc": "N<2,   Suc<15 kPa"},
+        "Soft":            {"N": 3,  "cu":  20, "Es":  3000, "Gamma": 16, "alpha": 24,  "desc": "N=2-4, Suc=15-25 kPa"},
+        "Medium Stiff":    {"N": 6,  "cu":  38, "Es":  8000, "Gamma": 17, "alpha": 48,  "desc": "N=4-8, Suc=25-50 kPa"},
+        "Stiff":           {"N": 12, "cu":  75, "Es": 18000, "Gamma": 18, "alpha": 96,  "desc": "N=8-15, Suc=50-100 kPa"},
+        "Very Stiff":      {"N": 22, "cu": 150, "Es": 40000, "Gamma": 19, "alpha": 150, "desc": "N=15-30, Suc=100-200 kPa"},
+        "Hard":            {"N": 40, "cu": 250, "Es": 75000, "Gamma": 20, "alpha": 200, "desc": "N>30,  Suc>200 kPa"},
     },
     "Sand": {
-        "Very Loose":   {"N": 2,  "phi": 26, "Es":  8000, "Gamma": 15, "nh_dry": 2200,  "nh_wet": 1300,  "desc": "N<4,   very loose, Dr<20%"},
-        "Loose":        {"N": 7,  "phi": 30, "Es": 20000, "Gamma": 17, "nh_dry": 6600,  "nh_wet": 4000,  "desc": "N=4-10, loose, Dr=20-40%"},
-        "Medium Dense": {"N": 20, "phi": 33, "Es": 45000, "Gamma": 18, "nh_dry": 17600, "nh_wet": 10500, "desc": "N=11-30, medium, Dr=40-60%"},
-        "Dense":        {"N": 40, "phi": 37, "Es": 80000, "Gamma": 19, "nh_dry": 35000, "nh_wet": 21000, "desc": "N=31-50, dense, Dr=60-80%"},
-        "Very Dense":   {"N": 55, "phi": 41, "Es":120000, "Gamma": 20, "nh_dry": 56000, "nh_wet": 34000, "desc": "N>50,  very dense, Dr>80%"},
+        # phi ranges per Table 6.3.2-1 (DRT/DOH standard); phi = midpoint of range
+        "Very Loose":   {"N": 2,  "phi": 26, "Es":  8000, "Gamma": 15, "nh_dry":  2200, "nh_wet":  1300, "desc": "N=0-4,   phi<28°"},
+        "Loose":        {"N": 7,  "phi": 29, "Es": 20000, "Gamma": 17, "nh_dry":  6600, "nh_wet":  4000, "desc": "N=4-10,  phi=28-30°"},
+        "Medium Dense": {"N": 20, "phi": 33, "Es": 45000, "Gamma": 18, "nh_dry": 17600, "nh_wet": 10500, "desc": "N=10-30, phi=30-36°"},
+        "Dense":        {"N": 40, "phi": 39, "Es": 80000, "Gamma": 19, "nh_dry": 35000, "nh_wet": 21000, "desc": "N=30-50, phi=36-41°"},
+        "Very Dense":   {"N": 55, "phi": 43, "Es":120000, "Gamma": 20, "nh_dry": 56000, "nh_wet": 34000, "desc": "N>50,    phi>41°"},
     }
 }
 
@@ -229,6 +231,12 @@ if "_prev_type_cons" not in st.session_state:
         i: (str(r.get("Soil_Type", "")), str(r.get("Consistency", "")))
         for i, r in _init.iterrows()
     }
+if "_prev_N" not in st.session_state:
+    _init = st.session_state.soil_layers
+    st.session_state["_prev_N"] = {
+        i: float(r.get("SPT_N", 0) or 0)
+        for i, r in _init.iterrows()
+    }
 
 #  ENGINEERING FUNCTIONS
 def get_alpha_clay(N):
@@ -239,6 +247,59 @@ def get_alpha_clay(N):
     elif N <= 15: return 96
     elif N <= 30: return 150
     else:         return 200
+
+# ── Interpolation: N-SPT → phi (Sand) and cu (Clay) ─────────────────
+# Breakpoints from Table 6.3.2-1 (DRT/DOH standard)
+_SAND_N_NODES   = [  0,   4,  10,  30,  50,  60,  100]
+_SAND_PHI_NODES = [ 24,  28,  30,  36,  41,  43,   45]   # °, linear interp; >50 extrapolated
+
+_CLAY_N_NODES   = [  0,   2,   4,   8,  15,  30,   60]
+_CLAY_CU_NODES  = [  0,  15,  25,  50, 100, 200,  400]  # kPa, linear interp
+
+def interp_phi_from_N(N):
+    """Linear interpolation of phi [deg] from SPT-N for Sand.
+    Based on Table 6.3.2-1 breakpoints. Capped at 45° for N>100.
+    """
+    N = max(0.0, float(N))
+    if N >= _SAND_N_NODES[-1]:
+        return float(_SAND_PHI_NODES[-1])
+    for i in range(len(_SAND_N_NODES) - 1):
+        n0, n1 = _SAND_N_NODES[i], _SAND_N_NODES[i + 1]
+        if n0 <= N <= n1:
+            t = (N - n0) / (n1 - n0)
+            return round(_SAND_PHI_NODES[i] + t * (_SAND_PHI_NODES[i + 1] - _SAND_PHI_NODES[i]), 1)
+    return float(_SAND_PHI_NODES[-1])
+
+def interp_cu_from_N(N):
+    """Linear interpolation of cu [kPa] from SPT-N for Clay.
+    Based on Table 6.3.2-1 breakpoints (Suc = cu). Extrapolates beyond N=60.
+    """
+    N = max(0.0, float(N))
+    if N >= _CLAY_N_NODES[-1]:
+        return round(_CLAY_CU_NODES[-1] + (N - _CLAY_N_NODES[-1]) * (_CLAY_CU_NODES[-1] - _CLAY_CU_NODES[-2]) / (_CLAY_N_NODES[-1] - _CLAY_N_NODES[-2]), 1)
+    for i in range(len(_CLAY_N_NODES) - 1):
+        n0, n1 = _CLAY_N_NODES[i], _CLAY_N_NODES[i + 1]
+        if n0 <= N <= n1:
+            t = (N - n0) / (n1 - n0)
+            return round(_CLAY_CU_NODES[i] + t * (_CLAY_CU_NODES[i + 1] - _CLAY_CU_NODES[i]), 1)
+    return float(_CLAY_CU_NODES[-1])
+
+def consistency_from_N(soil_type, N):
+    """Return Consistency label matching the N-SPT range per Table 6.3.2-1."""
+    N = float(N)
+    if soil_type == "Sand":
+        if N < 4:   return "Very Loose"
+        if N < 10:  return "Loose"
+        if N < 30:  return "Medium Dense"
+        if N <= 50: return "Dense"
+        return "Very Dense"
+    else:  # Clay
+        if N < 2:   return "Very Soft"
+        if N < 4:   return "Soft"
+        if N < 8:   return "Medium Stiff"
+        if N < 15:  return "Stiff"
+        if N <= 30: return "Very Stiff"
+        return "Hard"
 
 def calc_kh_jra(N, D, design_stage, soil_type, below_water):
     """JRA lateral subgrade modulus; sand below water table uses E0 x 0.6."""
@@ -475,23 +536,46 @@ def validate_soil_profile(df):
 
 
 def autofill_soil_row(row_dict):
-    """Fill a soil row from SOIL_DB when Soil_Type and Consistency are known."""
+    """Fill a soil row from SOIL_DB when Soil_Type and Consistency change.
+    Sets N-SPT = representative value from SOIL_DB, then derives phi/cu
+    via interpolation (Table 6.3.2-1) for consistency with N-edit workflow.
+    """
     stype = str(row_dict.get("Soil_Type", "") or "")
     cons  = str(row_dict.get("Consistency", "") or "")
     if stype in SOIL_DB and cons in SOIL_DB[stype]:
-        db = SOIL_DB[stype][cons]
+        db    = SOIL_DB[stype][cons]
         filled = dict(row_dict)
-        filled["SPT_N"] = float(db["N"])
+        N_rep  = float(db["N"])
+        filled["SPT_N"] = N_rep
         filled["Es"]    = float(db["Es"])
         filled["Gamma"] = float(db["Gamma"])
         if stype == "Clay":
-            filled["cu"]  = float(db["cu"])
+            filled["cu"]  = interp_cu_from_N(N_rep)
             filled["phi"] = 0.0
-        else:   # Sand
+        else:
             filled["cu"]  = 0.0
-            filled["phi"] = float(db["phi"])
+            filled["phi"] = interp_phi_from_N(N_rep)
         return filled, True
     return row_dict, False
+
+def autofill_from_N_change(row_dict):
+    """Re-derive phi/cu from updated N-SPT without touching other fields.
+    Also updates Consistency label to match the new N-SPT range.
+    Called when user manually edits N-SPT.
+    """
+    stype = str(row_dict.get("Soil_Type", "") or "")
+    N     = float(row_dict.get("SPT_N", 0) or 0)
+    if not stype or N <= 0:
+        return row_dict, False
+    filled = dict(row_dict)
+    filled["Consistency"] = consistency_from_N(stype, N)
+    if stype == "Clay":
+        filled["cu"]  = interp_cu_from_N(N)
+        filled["phi"] = 0.0
+    else:
+        filled["cu"]  = 0.0
+        filled["phi"] = interp_phi_from_N(N)
+    return filled, True
 
 
 def pile_section_figure(pile_type, D, B, H, Ap, Ipx, Ipy, Ep, compact=False):
@@ -1810,28 +1894,54 @@ with tab1:
         )
 
         prev_tc = st.session_state.get("_prev_type_cons", {})
-        new_tc = {}
+        prev_N  = st.session_state.get("_prev_N", {})
+        new_tc  = {}
+        new_N   = {}
         autofilled = edited_df.copy()
         did_fill = False
+        fill_reason = ""
 
         for idx, row in edited_df.iterrows():
-            stype = str(row.get("Soil_Type", "") or "")
-            cons = str(row.get("Consistency", "") or "")
+            stype   = str(row.get("Soil_Type", "") or "")
+            cons    = str(row.get("Consistency", "") or "")
+            curr_N  = float(row.get("SPT_N", 0) or 0)
             new_tc[idx] = (stype, cons)
-            if (stype and cons and stype in SOIL_DB and cons in SOIL_DB.get(stype, {}) and prev_tc.get(idx) != (stype, cons)):
+            new_N[idx]  = curr_N
+
+            type_cons_changed = (stype and cons and stype in SOIL_DB
+                                 and cons in SOIL_DB.get(stype, {})
+                                 and prev_tc.get(idx) != (stype, cons))
+            n_changed = (idx in prev_N
+                         and abs(curr_N - prev_N[idx]) > 0.49
+                         and not type_cons_changed
+                         and stype in ("Clay", "Sand")
+                         and curr_N > 0)
+
+            if type_cons_changed:
+                # Consistency เปลี่ยน → autofill N + interpolate phi/cu
                 filled_row, ok = autofill_soil_row(row.to_dict())
                 if ok:
                     autofilled.loc[idx] = pd.Series(filled_row)
+                    new_N[idx] = filled_row["SPT_N"]
                     did_fill = True
+                    fill_reason = "Soil parameters auto-filled from SOIL_DB."
+            elif n_changed:
+                # N-SPT เปลี่ยน → interpolate phi/cu + update Consistency label
+                filled_row, ok = autofill_from_N_change(row.to_dict())
+                if ok:
+                    autofilled.loc[idx] = pd.Series(filled_row)
+                    did_fill = True
+                    fill_reason = f"phi/cu interpolated from N-SPT = {curr_N:.0f} (Table 6.3.2-1)."
 
         st.session_state["_prev_type_cons"] = new_tc
+        st.session_state["_prev_N"] = new_N
 
         if did_fill:
             st.session_state.soil_layers = autofilled
             for w in ("soil_editor", "_soil_edited"):
                 if w in st.session_state:
                     del st.session_state[w]
-            st.toast("Soil parameters were auto-filled from SOIL_DB.")
+            st.toast(fill_reason)
             st.rerun()
         else:
             st.session_state["_soil_edited"] = edited_df
@@ -2967,7 +3077,8 @@ with tab6:
 - **Row-based spring table:** uses row-specific $f_m$ for each loading direction and row number; $K_{spring}=k_h \cdot D_{eq} \cdot L_{trib} \cdot f_m$.
 - **Vertical tip spring for rectangular piles:** the JRA size-effect diameter is taken as the equivalent circular diameter $D_{eq,c}=\sqrt{4A_p/\pi}$.
 - **Pile Design reinforcement guide:** recommended main steel ratio is a preliminary heuristic but is not allowed below the ACI 318-19 10.6.1.1 minimum of $0.01A_g$ for nonprestressed compression members.
-- **Terzaghi sand $n_h$ values:** the app uses rounded Bowles/Terzaghi design values; confirm project-specific references if exact table values are required.
+- **Terzaghi sand $n_h$ values:** uses Terzaghi (1955) / Terzaghi & Peck (1967) values with 5-level N-range gradation (N<4, N≤10, N≤30, N≤50, N>50); confirm project-specific references if required.
+- **N-SPT autofill:** When Soil Type + Consistency changes, N-SPT is set to the SOIL_DB representative value. When N-SPT is edited directly, $\phi$ (sand) and $c_u$ (clay) are linearly interpolated from Table 6.3.2-1 breakpoints, and Consistency label updates automatically.
 - **Sand below water table:** JRA applies $E_0 \times 0.6$; Vesic applies $E_s \times 0.6$.
 
 ### References
