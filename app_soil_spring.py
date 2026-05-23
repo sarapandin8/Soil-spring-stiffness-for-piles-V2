@@ -7,7 +7,7 @@ import json
 
 st.set_page_config(page_title="Pile Soil Spring Calculator", layout="wide", page_icon="P")
 
-VERSION = 17  # bumped: faster Pile Design PMM checks + default governing-only plots
+VERSION = 18  # bumped: clarify phi-PMM design strength labels + improve 3D plot aspect ratio
 
 #  CONSTANTS
 WIDGET_KEYS = [
@@ -3048,7 +3048,7 @@ with tab4:
                     fd3.plotly_chart(_force_figure("Muy [kN-m]", "Bending Moment About Y", "Muy [kN-m]"), use_container_width=True)
                     fd4.plotly_chart(_force_figure("V resultant [kN]", "Shear Force Resultant", "V = sqrt(Vx^2 + Vy^2) [kN]"), use_container_width=True)
 
-                    st.subheader("ACI PMM Interaction")
+                    st.subheader("ACI φPMM Design Strength Interaction")
 
                     ag_mm2 = Ap * 1e6
                     as_total_mm2 = float(bar_df["As_mm2"].sum())
@@ -3126,10 +3126,10 @@ with tab4:
                     ))
                     fig_uni.update_layout(
                         height=500,
-                        title=dict(text="Uniaxial interaction curves", font=dict(size=18)),
+                        title=dict(text="Uniaxial φPMM Design Strength Curves", font=dict(size=18)),
                         margin=dict(l=10, r=10, t=70, b=10),
-                        xaxis=dict(title="phi Mn (kN-m)", zeroline=True, zerolinecolor="#758195", gridcolor="#dbe2ec"),
-                        yaxis=dict(title="phi Pn (kN)", zeroline=True, zerolinecolor="#758195", gridcolor="#dbe2ec"),
+                        xaxis=dict(title="φMn [kN-m]", zeroline=True, zerolinecolor="#758195", gridcolor="#dbe2ec"),
+                        yaxis=dict(title="φPn [kN]", zeroline=True, zerolinecolor="#758195", gridcolor="#dbe2ec"),
                         legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="center", x=0.5),
                         plot_bgcolor="white",
                     )
@@ -3139,7 +3139,7 @@ with tab4:
 
                     governing_index = int(demand_df["PMM Util."].idxmax()) if not demand_df.empty else 0
                     slice_case = st.selectbox(
-                        "PMM slice load case",
+                        "φPMM slice load case",
                         demand_df["Case Plot Label"].astype(str).tolist(),
                         index=governing_index,
                         help="The Mux-Muy slice is drawn at the selected load case Pu."
@@ -3160,7 +3160,7 @@ with tab4:
                             fill="toself",
                             fillcolor="rgba(0, 150, 220, 0.12)",
                             line=dict(color="#008fd3", width=3),
-                            name="PMM slice"
+                            name="φPMM design slice"
                         ))
                     fig_slice.add_trace(go.Scatter(
                         x=[0.0, demand_mx],
@@ -3180,19 +3180,20 @@ with tab4:
                     ))
                     fig_slice.update_layout(
                         height=500,
-                        title=dict(text=f"PMM Mux-Muy slice at Pu = {slice_pu:,.0f} kN", font=dict(size=15)),
+                        title=dict(text=f"φPMM Mux-Muy Design Strength Slice at Pu = {slice_pu:,.0f} kN", font=dict(size=15)),
                         margin=dict(l=10, r=10, t=60, b=10),
-                        xaxis=dict(title="Mux (kN-m)", zeroline=True, zerolinecolor="#3f4654", gridcolor="#e2e8f0"),
-                        yaxis=dict(title="Muy (kN-m)", zeroline=True, zerolinecolor="#3f4654", gridcolor="#e2e8f0", scaleanchor="x", scaleratio=1),
+                        xaxis=dict(title="φMnx [kN-m]", zeroline=True, zerolinecolor="#3f4654", gridcolor="#e2e8f0"),
+                        yaxis=dict(title="φMny [kN-m]", zeroline=True, zerolinecolor="#3f4654", gridcolor="#e2e8f0", scaleanchor="x", scaleratio=1),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                         plot_bgcolor="white",
                     )
                     st.plotly_chart(fig_slice, use_container_width=True)
+                    st.caption("The slice boundary is φ-reduced design strength (φMnx, φMny) at the selected Pu; the marker/vector is the demand point.")
 
                     show_3d_pmm = st.checkbox(
-                        "Show 3D PMM interaction surface",
+                        "Show 3D φPMM design strength surface",
                         value=False,
-                        help="The 3D PMM plot is useful for review but can be heavier to render."
+                        help="The 3D φPMM plot is useful for review but can be heavier to render. The displayed aspect ratio is adjusted for readability."
                     )
                     if show_3d_pmm:
                         fig_pmm = go.Figure()
@@ -3206,7 +3207,7 @@ with tab4:
                                 opacity=0.42,
                                 colorscale=[[0, "#cfe7f6"], [1, "#5fa7dc"]],
                                 showscale=False,
-                                name="PMM surface",
+                                name="φPMM design surface",
                                 contours=dict(
                                     x=dict(show=False),
                                     y=dict(show=False),
@@ -3276,17 +3277,25 @@ with tab4:
                         fig_pmm.update_layout(
                             height=620,
                             margin=dict(l=0, r=0, t=45, b=0),
-                            title=dict(text="3D PMM interaction surface with load points", font=dict(size=15)),
+                            title=dict(text="3D φPMM Design Strength Surface with Load Points", font=dict(size=15)),
                             scene=dict(
-                                xaxis_title="Mux (kN-m)",
-                                yaxis_title="Muy (kN-m)",
-                                zaxis_title="Pu (kN)",
+                                xaxis_title="φMnx [kN-m]",
+                                yaxis_title="φMny [kN-m]",
+                                zaxis_title="φPn / Pu [kN]",
+                                aspectmode="manual",
+                                aspectratio=dict(x=1.30, y=1.30, z=0.72),
+                                camera=dict(eye=dict(x=1.55, y=1.55, z=0.95)),
                             ),
                             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                         )
                         pmm_plot_col, pmm_summary_col = st.columns([4.2, 1.25], gap="medium")
                         with pmm_plot_col:
                             st.plotly_chart(fig_pmm, use_container_width=True)
+                            st.caption(
+                                "Note: the 3D φPMM surface uses different engineering units on each axis "
+                                "(kN-m for moments and kN for axial force). The visual aspect ratio is adjusted "
+                                "for readability and should not be interpreted as geometric proportionality."
+                            )
                         with pmm_summary_col:
                             with st.container(border=True):
                                 st.markdown("**PMM U Summary**")
@@ -3324,14 +3333,14 @@ with tab4:
                             height=420
                         )
 
-                    with st.expander("PMM assumptions and workflow", expanded=False):
+                    with st.expander("φPMM assumptions and workflow", expanded=False):
                         st.markdown(
                             """
                             1. `Pu` is compression-positive and is held constant along the pile for each load case.
                             2. `Hx` produces lateral response in X and bending moment about the Y-axis (`Muy`).
                             3. `Hy` produces lateral response in Y and bending moment about the X-axis (`Mux`).
-                            4. PMM capacity is generated by ACI 318-style strain compatibility using a Whitney stress block, steel yielding, and phi factors from tensile strain.
-                            5. The primary biaxial PMM utilization is calculated by radial interpolation on the 3D PMM surface at the same `Pu`; the older linear uniaxial load-contour value is kept only as a comparison column.
+                            4. φPMM design strength capacity is generated by ACI 318-style strain compatibility using a Whitney stress block, steel yielding, and phi factors from tensile strain.
+                            5. The primary biaxial PMM utilization is calculated by radial interpolation on the 3D φPMM design strength surface at the same `Pu`; the older linear uniaxial load-contour value is kept only as a comparison column.
                             6. Final design should still be verified with the governing ACI edition, project load combinations, slenderness/detailing requirements, and independent engineering review.
                             """
                         )
