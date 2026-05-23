@@ -7,7 +7,7 @@ import json
 
 st.set_page_config(page_title="Pile Soil Spring Calculator", layout="wide", page_icon="P")
 
-VERSION = 18  # bumped: clarify phi-PMM design strength labels + improve 3D plot aspect ratio
+VERSION = 19  # bumped: include tension-side phi-PMM surface + uplift/tension utilization check
 
 #  CONSTANTS
 WIDGET_KEYS = [
@@ -1398,13 +1398,83 @@ def interaction_curve_envelope(curve_df):
         .reset_index(drop=True)
     )
 
+
+def expand_pmm_axial_anchors_for_slices(pmm_df):
+    """Duplicate pure axial PMM anchor points to every finite angle.
+
+    The PMM generator stores pure compression and pure tension anchor points
+    with Angle = NaN. Those anchors are essential for a closed 3D surface,
+    especially on the uplift/tension side. This helper makes the anchors
+    available to each angle group without changing the original calculation
+    results.
+    """
+    if pmm_df is None or pmm_df.empty:
+        return pd.DataFrame()
+
+    df = pmm_df.copy()
+    finite_angles = (
+        df["Angle [deg]"]
+        .dropna()
+        .astype(float)
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna()
+        .unique()
+    )
+    if len(finite_angles) == 0:
+        return df
+
+    axial_anchors = df[
+        df["Angle [deg]"].isna()
+        & np.isclose(pd.to_numeric(df["phiMnx [kN-m]"], errors="coerce"), 0.0)
+        & np.isclose(pd.to_numeric(df["phiMny [kN-m]"], errors="coerce"), 0.0)
+        & np.isfinite(pd.to_numeric(df["phiPn [kN]"], errors="coerce"))
+    ].copy()
+    if axial_anchors.empty:
+        return df
+
+    replicated = []
+    for _, anchor in axial_anchors.iterrows():
+        for angle in finite_angles:
+            row = anchor.copy()
+            row["Angle [deg]"] = float(angle)
+            replicated.append(row)
+
+    if replicated:
+        df = pd.concat([df, pd.DataFrame(replicated)], ignore_index=True)
+    return df
+
+
+def calc_phi_tension_capacity_from_bars(bar_df):
+    """Return factored pure tensile capacity φTn of longitudinal steel [kN]."""
+    if bar_df is None or bar_df.empty:
+        return 0.0
+    as_mm2 = pd.to_numeric(bar_df.get("As_mm2", 0.0), errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    fy_mpa = pd.to_numeric(bar_df.get("fy_mpa", 0.0), errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    return float(0.90 * np.sum(as_mm2 * fy_mpa) / 1000.0)
+
+
+def tension_utilization_for_pu(pu_kN, phi_tn_kN):
+    """Pure uplift/tension steel check. Compression cases return zero utilization."""
+    pu = float(pu_kN)
+    if pu >= 0.0:
+        return 0.0, "N/A"
+    if phi_tn_kN <= 1e-9:
+        return np.inf, "No tension steel capacity"
+    util = abs(pu) / float(phi_tn_kN)
+    return float(util), "OK" if util <= 1.0 else "NG"
+
 def pmm_slice_at_p(pmm_df, pu_kN):
-    """Interpolate an Mx-My capacity slice at a constant factored axial load."""
-    if pmm_df.empty:
+    """Interpolate an Mx-My capacity slice at a constant factored axial load.
+
+    Pure axial compression/tension anchors are expanded to every finite angle
+    so the constant-Pu slice remains available down to the pure uplift cap.
+    """
+    if pmm_df is None or pmm_df.empty:
         return pd.DataFrame(columns=["phiMnx [kN-m]", "phiMny [kN-m]", "phiPn [kN]", "Angle [deg]"])
 
+    pmm_work = expand_pmm_axial_anchors_for_slices(pmm_df)
     rows = []
-    for angle, grp in pmm_df.dropna(subset=["Angle [deg]"]).groupby("Angle [deg]"):
+    for angle, grp in pmm_work.dropna(subset=["Angle [deg]"]).groupby("Angle [deg]"):
         grp = grp[np.isfinite(grp["phiPn [kN]"])].copy()
         if len(grp) < 2:
             continue
@@ -1472,7 +1542,7 @@ def prepare_pmm_surface_for_checks(pmm_df, clamp_tol_ratio=0.002):
     """Pre-filter a PMM surface once so many demand points can be checked faster."""
     if pmm_df is None or pmm_df.empty:
         return pd.DataFrame(), 0.0, 0.0, 0.0
-    finite = pmm_df.dropna(subset=["Angle [deg]"]).copy()
+    finite = expand_pmm_axial_anchors_for_slices(pmm_df).dropna(subset=["Angle [deg]"]).copy()
     finite = finite[
         np.isfinite(finite["phiMnx [kN-m]"])
         & np.isfinite(finite["phiMny [kN-m]"])
@@ -1548,7 +1618,7 @@ def pmm_surface_radial_utilization(pmm_df, pu_kN, mux_kNm, muy_kNm, clamp_tol_ra
 
 def pmm_surface_grid(pmm_df, n_levels=28):
     """Build PMM surface matrices by stacking constant-Pu interaction slices."""
-    finite = pmm_df.dropna(subset=["Angle [deg]"]).copy()
+    finite = expand_pmm_axial_anchors_for_slices(pmm_df).dropna(subset=["Angle [deg]"]).copy()
     finite = finite[np.isfinite(finite["Angle [deg]"])]
     finite = finite[
         np.isfinite(finite["phiMnx [kN-m]"])
@@ -1558,8 +1628,8 @@ def pmm_surface_grid(pmm_df, n_levels=28):
     if finite.empty:
         return None
 
-    p_min = max(0.0, float(finite["phiPn [kN]"].quantile(0.02)))
-    p_max = float(finite["phiPn [kN]"].quantile(0.98))
+    p_min = float(finite["phiPn [kN]"].min())
+    p_max = float(finite["phiPn [kN]"].max())
     if p_max <= p_min:
         return None
 
@@ -1586,8 +1656,8 @@ def pmm_surface_grid(pmm_df, n_levels=28):
     return mx, my, p
 
 def pmm_polar_surface_grid(pmm_df, n_levels=30, n_angles=73):
-    """Build a closed PMM surface by stacking polar Mx-My capacity slices."""
-    finite = pmm_df.dropna(subset=["Angle [deg]"]).copy()
+    """Build a closed PMM surface by stacking polar Mx-My capacity slices, including Pu < 0."""
+    finite = expand_pmm_axial_anchors_for_slices(pmm_df).dropna(subset=["Angle [deg]"]).copy()
     finite = finite[
         np.isfinite(finite["phiMnx [kN-m]"])
         & np.isfinite(finite["phiMny [kN-m]"])
@@ -1596,8 +1666,8 @@ def pmm_polar_surface_grid(pmm_df, n_levels=30, n_angles=73):
     if finite.empty:
         return None
 
-    p_min = max(0.0, float(finite["phiPn [kN]"].quantile(0.02)))
-    p_max = float(finite["phiPn [kN]"].quantile(0.98))
+    p_min = float(finite["phiPn [kN]"].min())
+    p_max = float(finite["phiPn [kN]"].max())
     if p_max <= p_min:
         return None
 
@@ -2784,6 +2854,7 @@ with tab4:
                 )
                 mx_curve = uniaxial_interaction_curve(pmm_df, "Mx")
                 my_curve = uniaxial_interaction_curve(pmm_df, "My")
+                phi_tn_kN = calc_phi_tension_capacity_from_bars(bar_df)
                 pmm_finite, pmm_p_min, pmm_p_max, pmm_p_tol = prepare_pmm_surface_for_checks(pmm_df)
                 pmm_slice_cache = {}
 
@@ -2866,6 +2937,9 @@ with tab4:
                         ]
                     util_profile = np.asarray([chk["utilization"] for chk in pmm_checks], dtype=float)
                     util_profile = np.where(np.isfinite(util_profile), util_profile, np.inf)
+                    tension_util, tension_status = tension_utilization_for_pu(pu_kN, phi_tn_kN)
+                    overall_case_util = max(float(np.max(util_profile)), float(tension_util))
+                    overall_case_status = "OK" if overall_case_util <= 1.0 else "NG"
                     imx = int(np.argmax(np.abs(moment_x))) if len(moment_x) else 0
                     imy = int(np.argmax(np.abs(moment_y))) if len(moment_y) else 0
                     iv = int(np.argmax(np.abs(shear_resultant))) if len(shear_resultant) else 0
@@ -2889,6 +2963,9 @@ with tab4:
                         "Max |V| [kN]": float(np.max(np.abs(shear_resultant))),
                         "z @ V [m]": float(depths[iv]),
                         "PMM Util.": float(np.max(util_profile)),
+                        "Tension Util.": float(tension_util),
+                        "Overall Util.": float(overall_case_util),
+                        "Overall Status": overall_case_status,
                         "Linear PMM Util.": float(np.max(linear_util_profile)),
                         "z @ PMM [m]": float(depths[iu]),
                         "PMM Mux [kN-m]": float(moment_x[iu]) if len(moment_x) else 0.0,
@@ -2898,6 +2975,9 @@ with tab4:
                         "PMM cap Mux [kN-m]": float(governing_pmm["capacity_mux"]),
                         "PMM cap Muy [kN-m]": float(governing_pmm["capacity_muy"]),
                         "PMM Status": governing_pmm["status"],
+                        "φTn tension cap [kN]": float(phi_tn_kN),
+                        "Tension Status": tension_status,
+                        "Pu Sign": "Tension/Uplift" if pu_kN < 0.0 else "Compression",
                         "Mx cap @ Pu [kN-m]": mcap_x,
                         "My cap @ Pu [kN-m]": mcap_y,
                     })
@@ -2907,8 +2987,10 @@ with tab4:
                 else:
                     profile_df = pd.concat(profile_frames, ignore_index=True)
                     demand_df = pd.DataFrame(summary_rows)
-                    max_util = float(demand_df["PMM Util."].max()) if not demand_df.empty else np.inf
-                    governing = demand_df.loc[demand_df["PMM Util."].idxmax()] if not demand_df.empty else None
+                    max_util = float(demand_df["Overall Util."].max()) if not demand_df.empty else np.inf
+                    max_pmm_util = float(demand_df["PMM Util."].max()) if not demand_df.empty else np.inf
+                    max_tension_util = float(demand_df["Tension Util."].max()) if not demand_df.empty else 0.0
+                    governing = demand_df.loc[demand_df["Overall Util."].idxmax()] if not demand_df.empty else None
                     overall_pu_max = float(demand_df["Max Pu [kN]"].max())
                     overall_pu_min = float(demand_df["Min Pu [kN]"].min())
                     overall_mx = float(demand_df["Max |Mux| [kN-m]"].max())
@@ -2929,7 +3011,7 @@ with tab4:
                     env2.metric("Min Pu [kN]", f"{overall_pu_min:,.1f}")
                     env3.metric("Max |Mux| [kN-m]", f"{overall_mx:,.1f}")
                     env4.metric("Max |Muy| [kN-m]", f"{overall_my:,.1f}")
-                    env5.metric("Max PMM Util.", f"{max_util:,.2f}", "OK" if max_util <= 1.0 else "Increase steel")
+                    env5.metric("Max Overall Util.", f"{max_util:,.2f}", "OK" if max_util <= 1.0 else "Increase steel / check uplift")
 
                     left_design, right_design = st.columns([1.05, 1.15], gap="large")
                     with left_design:
@@ -2945,12 +3027,18 @@ with tab4:
                             ("Main bar", f"{len(bar_df)} {main_bar}", f"fy = {get_rebar_fy_mpa(main_bar):.0f} MPa"),
                             ("Provided As", f"{bar_df['As_mm2'].sum():,.0f} mm2", f"{bar_df['As_mm2'].sum() / 100.0:,.1f} cm2"),
                             ("Transverse system", transverse_system, f"{tie_bar} @ {tie_spacing_mm:.0f} mm"),
-                            ("PMM interaction", "OK" if max_util <= 1.0 else "NG", f"governing = {governing['Load Case'] if governing is not None else '-'}"),
+                            ("PMM interaction", "OK" if max_pmm_util <= 1.0 else "NG", f"max PMM U = {max_pmm_util:.3f}"),
+                            ("Uplift/tension", "OK" if max_tension_util <= 1.0 else "NG", f"φTn = {phi_tn_kN:,.1f} kN; max tension U = {max_tension_util:.3f}"),
+                            ("Overall structural", "OK" if max_util <= 1.0 else "NG", f"governing = {governing['Load Case'] if governing is not None else '-'}"),
                             ("Recommended tie spacing", f"{shear_summary['s_rec_mm']:.0f} mm", "preliminary shear/confinement check"),
                         ]
                         st.table(pd.DataFrame(section_info, columns=["Item", "Value", "Note"]))
-                        if max_util > 1.0:
+                        if max_pmm_util > 1.0:
                             st.warning("PMM utilization exceeds 1.0. Increase main bar size/quantity or revise the section.")
+                        if max_tension_util > 1.0:
+                            st.warning("Uplift/tension utilization exceeds 1.0. Increase longitudinal steel or revise the uplift load path.")
+                        if overall_pu_min < 0.0:
+                            st.info("At least one load case has Pu < 0 (tension/uplift). The app now checks φTn = 0.90·ΣAsfy separately, but pile-cap anchorage and geotechnical uplift must still be verified outside this PMM plot.")
                         if not tie_ok:
                             st.warning("Provided tie spacing is larger than the preliminary recommended spacing.")
 
@@ -2967,6 +3055,8 @@ with tab4:
                                 "Max |V| [kN]": "{:,.1f}",
                                 "z @ V [m]": "{:.2f}",
                                 "PMM Util.": "{:.3f}",
+                                "Tension Util.": "{:.3f}",
+                                "Overall Util.": "{:.3f}",
                                 "Linear PMM Util.": "{:.3f}",
                                 "z @ PMM [m]": "{:.2f}",
                                 "PMM Mux [kN-m]": "{:,.1f}",
@@ -2977,6 +3067,7 @@ with tab4:
                                 "PMM cap Muy [kN-m]": "{:,.1f}",
                                 "Mx cap @ Pu [kN-m]": "{:,.1f}",
                                 "My cap @ Pu [kN-m]": "{:,.1f}",
+                                "φTn tension cap [kN]": "{:,.1f}",
                             }),
                             use_container_width=True,
                             hide_index=True,
@@ -2987,7 +3078,8 @@ with tab4:
                             - **Provided main steel:** `{bar_df['As_mm2'].sum():,.0f} mm2`
                             - **Maximum shear resultant:** `{overall_v:,.1f} kN`
                             - **Recommended tie spacing:** `{shear_summary['s_rec_mm']:.0f} mm`
-                            - **PMM check:** 3D surface radial utilization from the ACI-style strain-compatible PMM surface.
+                            - **PMM check:** 3D surface radial utilization from the ACI-style strain-compatible φPMM surface.
+                            - **Uplift check:** φTn = `0.90·ΣAsfy = {phi_tn_kN:,.1f} kN`; Overall U = max(PMM U, Tension U).
                             """
                         )
 
@@ -3137,7 +3229,7 @@ with tab4:
                     if pile_type == "Round":
                         st.caption("For round piles, the about-x and about-y interaction curves are nearly identical, so the dashed red curve can overlap the blue curve.")
 
-                    governing_index = int(demand_df["PMM Util."].idxmax()) if not demand_df.empty else 0
+                    governing_index = int(demand_df["Overall Util."].idxmax()) if not demand_df.empty else 0
                     slice_case = st.selectbox(
                         "φPMM slice load case",
                         demand_df["Case Plot Label"].astype(str).tolist(),
@@ -3174,7 +3266,7 @@ with tab4:
                         y=[demand_my],
                         mode="markers+text",
                         marker=dict(symbol="x", color="#1b6b6b", size=13, line=dict(width=3)),
-                        text=[f"{slice_case_name}<br>U={slice_row['PMM Util.']:.3f}"],
+                        text=[f"{slice_case_name}<br>Overall U={slice_row['Overall Util.']:.3f}<br>PMM U={slice_row['PMM Util.']:.3f}"],
                         textposition="bottom right",
                         name="demand"
                     ))
@@ -3232,9 +3324,20 @@ with tab4:
                             line=dict(color="#1b6b6b", width=5),
                             name="demand vector"
                         ))
+                        if phi_tn_kN > 0.0:
+                            fig_pmm.add_trace(go.Scatter3d(
+                                x=[0.0],
+                                y=[0.0],
+                                z=[-phi_tn_kN],
+                                mode="markers+text",
+                                marker=dict(size=7, color="#b45309", symbol="diamond", line=dict(color="white", width=1)),
+                                text=["pure tension φTn"],
+                                textposition="bottom center",
+                                name="pure tension φTn"
+                            ))
                         load_point_colors = [
-                            "#c4123f" if float(u) > 1.0 else "#1b6b6b"
-                            for u in demand_df["PMM Util."]
+                            "#c4123f" if float(u) > 1.0 else ("#b45309" if str(sign).startswith("Tension") else "#1b6b6b")
+                            for u, sign in zip(demand_df["Overall Util."], demand_df["Pu Sign"])
                         ]
                         fig_pmm.add_trace(go.Scatter3d(
                             x=demand_df["PMM Mux [kN-m]"],
@@ -3249,17 +3352,21 @@ with tab4:
                             text=demand_df["Load Case"],
                             textposition="top center",
                             customdata=np.stack([
+                                demand_df["Overall Util."].to_numpy(dtype=float),
                                 demand_df["PMM Util."].to_numpy(dtype=float),
+                                demand_df["Tension Util."].to_numpy(dtype=float),
                                 demand_df["PMM Mux [kN-m]"].to_numpy(dtype=float),
                                 demand_df["PMM Muy [kN-m]"].to_numpy(dtype=float),
                                 demand_df["Max Pu [kN]"].to_numpy(dtype=float),
                             ], axis=-1),
                             hovertemplate=(
                                 "%{text}<br>"
-                                "U = %{customdata[0]:.3f}<br>"
-                                "Mux = %{customdata[1]:,.1f} kN-m<br>"
-                                "Muy = %{customdata[2]:,.1f} kN-m<br>"
-                                "Pu = %{customdata[3]:,.1f} kN"
+                                "Overall U = %{customdata[0]:.3f}<br>"
+                                "PMM U = %{customdata[1]:.3f}<br>"
+                                "Tension U = %{customdata[2]:.3f}<br>"
+                                "Mux = %{customdata[3]:,.1f} kN-m<br>"
+                                "Muy = %{customdata[4]:,.1f} kN-m<br>"
+                                "Pu = %{customdata[5]:,.1f} kN"
                                 "<extra></extra>"
                             ),
                             name="all load points",
@@ -3270,14 +3377,14 @@ with tab4:
                             z=[slice_pu],
                             mode="markers+text",
                             marker=dict(size=8, color="#0f766e", line=dict(color="white", width=1.5)),
-                            text=[f"U={slice_row['PMM Util.']:.3f}"],
+                            text=[f"Overall U={slice_row['Overall Util.']:.3f}"],
                             textposition="top center",
                             name="selected load point",
                         ))
                         fig_pmm.update_layout(
                             height=620,
                             margin=dict(l=0, r=0, t=45, b=0),
-                            title=dict(text="3D φPMM Design Strength Surface with Load Points", font=dict(size=15)),
+                            title=dict(text="3D φPMM Design Strength Surface with Tension Side and Load Points", font=dict(size=15)),
                             scene=dict(
                                 xaxis_title="φMnx [kN-m]",
                                 yaxis_title="φMny [kN-m]",
@@ -3294,21 +3401,24 @@ with tab4:
                             st.caption(
                                 "Note: the 3D φPMM surface uses different engineering units on each axis "
                                 "(kN-m for moments and kN for axial force). The visual aspect ratio is adjusted "
-                                "for readability and should not be interpreted as geometric proportionality."
+                                "for readability and should not be interpreted as geometric proportionality. "
+                                "For Pu < 0, the lower part of the surface is the tension/uplift side, closing toward pure steel tension φTn."
                             )
                         with pmm_summary_col:
                             with st.container(border=True):
-                                st.markdown("**PMM U Summary**")
-                                st.caption("All active load cases")
-                                for _, row in demand_df.sort_values("PMM Util.", ascending=False).iterrows():
-                                    util = float(row["PMM Util."])
+                                st.markdown("**PMM / Uplift U Summary**")
+                                st.caption("All active load cases; Overall U = max(PMM U, Tension U)")
+                                for _, row in demand_df.sort_values("Overall Util.", ascending=False).iterrows():
+                                    util = float(row["Overall Util."])
                                     status = "NG" if util > 1.0 else "OK"
                                     status_color = "red" if util > 1.0 else "green"
                                     selected_badge = " (selected)" if str(row["Case Plot Label"]) == str(slice_case) else ""
                                     st.markdown(f"**{row['Case Plot Label']}{selected_badge}**")
-                                    st.markdown(f"U = :{status_color}[**{util:.3f} ({status})**]")
+                                    st.markdown(f"Overall U = :{status_color}[**{util:.3f} ({status})**]")
                                     st.caption(
-                                        f"Pu = {float(row['Max Pu [kN]']):,.1f} kN  \n"
+                                        f"Pu = {float(row['Max Pu [kN]']):,.1f} kN ({row['Pu Sign']})  \n"
+                                        f"PMM U = {float(row['PMM Util.']):.3f}  \n"
+                                        f"Tension U = {float(row['Tension Util.']):.3f}  \n"
                                         f"Mux = {float(row['PMM Mux [kN-m]']):,.1f} kN-m  \n"
                                         f"Muy = {float(row['PMM Muy [kN-m]']):,.1f} kN-m"
                                     )
