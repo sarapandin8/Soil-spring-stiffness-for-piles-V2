@@ -7,7 +7,7 @@ import json
 
 st.set_page_config(page_title="Pile Soil Spring Calculator", layout="wide", page_icon="P")
 
-VERSION = 15  # bumped: Excel paste importer for Pile Design load cases + robust load-case cleaning
+VERSION = 16  # bumped: faster Pile Design PMM checks + default governing-only plots
 
 #  CONSTANTS
 WIDGET_KEYS = [
@@ -1468,14 +1468,71 @@ def pmm_slice_radial_capacity(slice_df, theta_rad):
     theta = float(np.mod(theta_rad, 2.0 * np.pi))
     return float(np.interp(theta, angle_ext, radius_ext))
 
-def pmm_surface_radial_utilization(pmm_df, pu_kN, mux_kNm, muy_kNm, clamp_tol_ratio=0.002):
-    """Check biaxial PMM demand by radial interpolation on the 3D PMM surface."""
+def prepare_pmm_surface_for_checks(pmm_df, clamp_tol_ratio=0.002):
+    """Pre-filter a PMM surface once so many demand points can be checked faster."""
+    if pmm_df is None or pmm_df.empty:
+        return pd.DataFrame(), 0.0, 0.0, 0.0
     finite = pmm_df.dropna(subset=["Angle [deg]"]).copy()
     finite = finite[
         np.isfinite(finite["phiMnx [kN-m]"])
         & np.isfinite(finite["phiMny [kN-m]"])
         & np.isfinite(finite["phiPn [kN]"])
     ]
+    if finite.empty:
+        return finite, 0.0, 0.0, 0.0
+    p_min = float(finite["phiPn [kN]"].min())
+    p_max = float(finite["phiPn [kN]"].max())
+    tol = max((p_max - p_min) * float(clamp_tol_ratio), 1e-6)
+    return finite, p_min, p_max, tol
+
+
+def clamp_pu_to_pmm_range(pu_kN, p_min, p_max, tol):
+    """Clamp tiny axial-load round-off excursions; flag real out-of-range demands."""
+    pu_use = float(pu_kN)
+    if pu_use < p_min:
+        if pu_use >= p_min - tol:
+            return float(p_min), None
+        return pu_use, "Pu below PMM range"
+    if pu_use > p_max:
+        if pu_use <= p_max + tol:
+            return float(p_max), None
+        return pu_use, "Pu above PMM range"
+    return pu_use, None
+
+
+def pmm_utilization_from_slice(slice_df, pu_use, mux_kNm, muy_kNm, out_of_range_status=None):
+    """Check one biaxial demand using a precomputed constant-Pu PMM slice."""
+    if out_of_range_status:
+        return {
+            "utilization": np.inf,
+            "capacity_m": 0.0,
+            "capacity_mux": 0.0,
+            "capacity_muy": 0.0,
+            "pu_used": float(pu_use),
+            "status": out_of_range_status,
+        }
+    demand_m = float(np.hypot(mux_kNm, muy_kNm))
+    theta = float(np.arctan2(muy_kNm, mux_kNm)) if demand_m > 1e-9 else 0.0
+    capacity_m = pmm_slice_radial_capacity(slice_df, theta)
+    if demand_m <= 1e-9:
+        utilization = 0.0
+    elif capacity_m <= 1e-9:
+        utilization = np.inf
+    else:
+        utilization = demand_m / capacity_m
+    return {
+        "utilization": float(utilization),
+        "capacity_m": float(capacity_m),
+        "capacity_mux": float(capacity_m * np.cos(theta)),
+        "capacity_muy": float(capacity_m * np.sin(theta)),
+        "pu_used": float(pu_use),
+        "status": "OK" if utilization <= 1.0 else "NG",
+    }
+
+
+def pmm_surface_radial_utilization(pmm_df, pu_kN, mux_kNm, muy_kNm, clamp_tol_ratio=0.002):
+    """Check biaxial PMM demand by radial interpolation on the 3D PMM surface."""
+    finite, p_min, p_max, tol = prepare_pmm_surface_for_checks(pmm_df, clamp_tol_ratio)
     if finite.empty:
         return {
             "utilization": np.inf,
@@ -1485,56 +1542,9 @@ def pmm_surface_radial_utilization(pmm_df, pu_kN, mux_kNm, muy_kNm, clamp_tol_ra
             "pu_used": float(pu_kN),
             "status": "No PMM surface",
         }
-
-    p_min = float(finite["phiPn [kN]"].min())
-    p_max = float(finite["phiPn [kN]"].max())
-    tol = max((p_max - p_min) * float(clamp_tol_ratio), 1e-6)
-    pu_use = float(pu_kN)
-    if pu_use < p_min:
-        if pu_use >= p_min - tol:
-            pu_use = p_min
-        else:
-            return {
-                "utilization": np.inf,
-                "capacity_m": 0.0,
-                "capacity_mux": 0.0,
-                "capacity_muy": 0.0,
-                "pu_used": pu_use,
-                "status": "Pu below PMM range",
-            }
-    elif pu_use > p_max:
-        if pu_use <= p_max + tol:
-            pu_use = p_max
-        else:
-            return {
-                "utilization": np.inf,
-                "capacity_m": 0.0,
-                "capacity_mux": 0.0,
-                "capacity_muy": 0.0,
-                "pu_used": pu_use,
-                "status": "Pu above PMM range",
-            }
-
-    demand_m = float(np.hypot(mux_kNm, muy_kNm))
-    theta = float(np.arctan2(muy_kNm, mux_kNm)) if demand_m > 1e-9 else 0.0
-    slice_df = pmm_slice_at_p(finite, pu_use)
-    capacity_m = pmm_slice_radial_capacity(slice_df, theta)
-
-    if demand_m <= 1e-9:
-        utilization = 0.0
-    elif capacity_m <= 1e-9:
-        utilization = np.inf
-    else:
-        utilization = demand_m / capacity_m
-
-    return {
-        "utilization": float(utilization),
-        "capacity_m": float(capacity_m),
-        "capacity_mux": float(capacity_m * np.cos(theta)),
-        "capacity_muy": float(capacity_m * np.sin(theta)),
-        "pu_used": float(pu_use),
-        "status": "OK" if utilization <= 1.0 else "NG",
-    }
+    pu_use, out_of_range_status = clamp_pu_to_pmm_range(pu_kN, p_min, p_max, tol)
+    slice_df = pd.DataFrame() if out_of_range_status else pmm_slice_at_p(finite, pu_use)
+    return pmm_utilization_from_slice(slice_df, pu_use, mux_kNm, muy_kNm, out_of_range_status)
 
 def pmm_surface_grid(pmm_df, n_levels=28):
     """Build PMM surface matrices by stacking constant-Pu interaction slices."""
@@ -2681,13 +2691,59 @@ with tab4:
             n_tie_legs = cfg3.number_input("Tie legs", min_value=2, max_value=12, value=2, step=1)
             n_main_bars = None
 
+        try:
+            load_case_hash = int(pd.util.hash_pandas_object(load_cases, index=True).sum())
+        except Exception:
+            load_case_hash = hash(load_cases.to_json())
+        if spring_source == "Row-based spring" and use_group and not df_row_results.empty:
+            spring_sig_df = df_row_results[["Direction", "Row No.", "Node", "Depth [m]", "Kspring [kN/m]"]].copy()
+        else:
+            spring_sig_df = df_results[["Node", "Depth [m]", "Ksx [kN/m]", "Ksy [kN/m]"]].copy()
+        try:
+            spring_table_hash = int(pd.util.hash_pandas_object(spring_sig_df, index=True).sum())
+        except Exception:
+            spring_table_hash = hash(spring_sig_df.to_json())
+        pile_design_signature = json.dumps({
+            "load_case_hash": load_case_hash,
+            "spring_source": spring_source,
+            "x_design_row": int(x_design_row),
+            "y_design_row": int(y_design_row),
+            "spring_table_hash": spring_table_hash,
+            "pile_type": pile_type,
+            "D": float(D),
+            "B": float(B),
+            "H": float(H),
+            "L": float(L),
+            "fc": float(fc),
+            "cover_mm": float(cover_mm),
+            "main_bar": main_bar,
+            "tie_bar": tie_bar,
+            "tie_spacing_mm": float(tie_spacing_mm),
+            "transverse_system": transverse_system,
+            "n_main_bars": None if n_main_bars is None else int(n_main_bars),
+            "n_b_face": None if n_b_face is None else int(n_b_face),
+            "n_h_face": None if n_h_face is None else int(n_h_face),
+            "n_tie_legs": int(n_tie_legs),
+        }, sort_keys=True)
+
+        previous_signature = st.session_state.get("pile_design_last_signature")
+        if bool(st.session_state.get("pile_design_has_run", False)) and previous_signature != pile_design_signature:
+            st.session_state["pile_design_has_run"] = False
+            st.session_state["pile_design_stale_reason"] = "Inputs changed after the last run."
+
         run_col, note_col = st.columns([1.0, 2.2])
         if run_col.button("Run / Update Pile Design", type="primary", use_container_width=True):
             st.session_state["pile_design_has_run"] = True
-        note_col.caption("PMM interaction and force diagrams are calculated only after running this design step.")
+            st.session_state["pile_design_last_signature"] = pile_design_signature
+            st.session_state.pop("pile_design_stale_reason", None)
+        note_col.caption("PMM interaction and force diagrams are calculated only after pressing this button. Editing inputs makes the previous run stale.")
         design_has_run = bool(st.session_state.get("pile_design_has_run", False))
         if not design_has_run:
-            st.info("Click **Run / Update Pile Design** after editing load cases or reinforcement.")
+            stale_reason = st.session_state.get("pile_design_stale_reason", "")
+            if stale_reason:
+                st.warning(f"{stale_reason} Click **Run / Update Pile Design** to recalculate.")
+            else:
+                st.info("Click **Run / Update Pile Design** after editing load cases or reinforcement.")
             active_cases = active_cases.iloc[0:0].copy()
 
         if active_cases.empty:
@@ -2728,6 +2784,8 @@ with tab4:
                 )
                 mx_curve = uniaxial_interaction_curve(pmm_df, "Mx")
                 my_curve = uniaxial_interaction_curve(pmm_df, "My")
+                pmm_finite, pmm_p_min, pmm_p_max, pmm_p_tol = prepare_pmm_surface_for_checks(pmm_df)
+                pmm_slice_cache = {}
 
                 profile_frames = []
                 summary_rows = []
@@ -2778,10 +2836,31 @@ with tab4:
                         + np.abs(moment_y) / max(mcap_y, 1e-9)
                     )
                     linear_util_profile = np.where(np.isfinite(linear_util_profile), linear_util_profile, np.inf)
-                    pmm_checks = [
-                        pmm_surface_radial_utilization(pmm_df, pu_kN, mx, my)
-                        for mx, my in zip(moment_x, moment_y)
-                    ]
+                    if pmm_finite.empty:
+                        pmm_checks = [
+                            {
+                                "utilization": np.inf,
+                                "capacity_m": 0.0,
+                                "capacity_mux": 0.0,
+                                "capacity_muy": 0.0,
+                                "pu_used": pu_kN,
+                                "status": "No PMM surface",
+                            }
+                            for _ in range(len(moment_x))
+                        ]
+                    else:
+                        pu_use, pu_out_status = clamp_pu_to_pmm_range(pu_kN, pmm_p_min, pmm_p_max, pmm_p_tol)
+                        cache_key = round(float(pu_use), 6)
+                        if pu_out_status:
+                            slice_for_case = pd.DataFrame()
+                        else:
+                            if cache_key not in pmm_slice_cache:
+                                pmm_slice_cache[cache_key] = pmm_slice_at_p(pmm_finite, pu_use)
+                            slice_for_case = pmm_slice_cache[cache_key]
+                        pmm_checks = [
+                            pmm_utilization_from_slice(slice_for_case, pu_use, mx, my, pu_out_status)
+                            for mx, my in zip(moment_x, moment_y)
+                        ]
                     util_profile = np.asarray([chk["utilization"] for chk in pmm_checks], dtype=float)
                     util_profile = np.where(np.isfinite(util_profile), util_profile, np.inf)
                     imx = int(np.argmax(np.abs(moment_x))) if len(moment_x) else 0
@@ -2908,12 +2987,35 @@ with tab4:
                         )
 
                     st.subheader("Force Diagrams Along Pile")
+                    force_case_names = demand_df["Load Case"].tolist()
+                    governing_case_name = str(governing["Load Case"]) if governing is not None else (force_case_names[0] if force_case_names else "")
+                    plot_mode = st.radio(
+                        "Force diagram display",
+                        ["Governing case only", "Selected case only", "All active cases"],
+                        horizontal=True,
+                        index=0,
+                        help="Plotting all cases can be slow and unreadable when many load cases are imported."
+                    )
+                    if plot_mode == "Selected case only":
+                        selected_force_case = st.selectbox(
+                            "Force diagram load case",
+                            force_case_names,
+                            index=force_case_names.index(governing_case_name) if governing_case_name in force_case_names else 0,
+                        )
+                        plot_profile_df = profile_df[profile_df["Load Case"].astype(str) == str(selected_force_case)].copy()
+                    elif plot_mode == "All active cases":
+                        plot_profile_df = profile_df.copy()
+                        if len(force_case_names) > 20:
+                            st.warning("Many load cases are selected for plotting. Switch back to governing/selected mode if the page feels slow.")
+                    else:
+                        plot_profile_df = profile_df[profile_df["Load Case"].astype(str) == str(governing_case_name)].copy()
+
                     symbols = ["circle", "square", "diamond", "triangle-up", "cross", "x", "star", "hexagon", "triangle-down", "pentagon"]
                     colors = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22"]
 
                     def _force_figure(x_col, title, x_title):
                         fig = go.Figure()
-                        for i, (lc, grp) in enumerate(profile_df.groupby("Load Case", sort=False)):
+                        for i, (lc, grp) in enumerate(plot_profile_df.groupby("Load Case", sort=False)):
                             fig.add_trace(go.Scatter(
                                 x=grp[x_col],
                                 y=grp["Depth [m]"],
