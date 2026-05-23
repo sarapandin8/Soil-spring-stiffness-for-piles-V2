@@ -2,12 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from io import BytesIO
+from io import BytesIO, StringIO
 import json
 
 st.set_page_config(page_title="Pile Soil Spring Calculator", layout="wide", page_icon="P")
 
-VERSION = 14  # bumped: fix N-SPT edit loop (new_tc sync), NaN guard, SPT_N fillna+step config
+VERSION = 15  # bumped: Excel paste importer for Pile Design load cases + robust load-case cleaning
 
 #  CONSTANTS
 WIDGET_KEYS = [
@@ -493,6 +493,157 @@ def draw_spring(x0, x1, y, n_coils=7):
         ]
         ys += [y + dx, y - dx, y + dx, y]
     return xs, ys
+
+
+def _parse_load_case_bool(value):
+    """Parse checkbox-like values pasted from Excel."""
+    if isinstance(value, bool):
+        return value
+    txt = str(value).strip().lower()
+    if txt in ("", "nan", "none", "<na>"):
+        return True
+    if txt in ("true", "t", "yes", "y", "1", "use", "ใช่"):
+        return True
+    if txt in ("false", "f", "no", "n", "0", "ไม่", "ไม่ใช้"):
+        return False
+    return True
+
+
+def _clean_load_case_number(value):
+    """Convert pasted load values to float while tolerating commas and unit text."""
+    txt = str(value).strip()
+    if txt.lower() in ("", "nan", "none", "<na>"):
+        return np.nan
+    txt = (
+        txt.replace(",", "")
+           .replace("kN", "")
+           .replace("KN", "")
+           .replace("kn", "")
+           .strip()
+    )
+    return pd.to_numeric(txt, errors="coerce")
+
+
+def clean_pile_load_cases(load_case_input, drop_blank=True):
+    """Return a calculation-ready load case table with stable column names and types."""
+    if load_case_input is None or len(load_case_input) == 0:
+        return pd.DataFrame(columns=["Use", "Load Case", "Pu [kN]", "Hx [kN]", "Hy [kN]"])
+
+    load_cases = load_case_input.copy()
+    required_cols = ["Use", "Load Case", "Pu [kN]", "Hx [kN]", "Hy [kN]"]
+    for col in required_cols:
+        if col not in load_cases.columns:
+            load_cases[col] = True if col == "Use" else ("" if col == "Load Case" else np.nan)
+
+    load_cases = load_cases[required_cols].copy()
+    load_cases["Load Case"] = (
+        load_cases["Load Case"]
+        .fillna("")
+        .astype(str)
+        .replace({"nan": "", "None": "", "<NA>": ""})
+        .str.strip()
+    )
+    load_cases["Use"] = load_cases["Use"].apply(_parse_load_case_bool).astype(bool)
+
+    for col in ["Pu [kN]", "Hx [kN]", "Hy [kN]"]:
+        load_cases[col] = load_cases[col].apply(_clean_load_case_number)
+
+    numeric_blank = load_cases[["Pu [kN]", "Hx [kN]", "Hy [kN]"]].isna().all(axis=1)
+    name_blank = load_cases["Load Case"].eq("")
+    if drop_blank:
+        load_cases = load_cases.loc[~(name_blank & numeric_blank)].copy()
+
+    for col in ["Pu [kN]", "Hx [kN]", "Hy [kN]"]:
+        load_cases[col] = load_cases[col].fillna(0.0).astype(float)
+
+    for i, idx in enumerate(load_cases.index, start=1):
+        if load_cases.at[idx, "Load Case"] == "":
+            load_cases.at[idx, "Load Case"] = f"LC{i}"
+
+    return load_cases.reset_index(drop=True)
+
+
+def parse_pasted_load_cases(paste_text):
+    """Parse a formatted Excel copy/paste table into the app load-case schema.
+
+    Accepted formats:
+    1) Use | Load Case | Pu [kN] | Hx [kN] | Hy [kN]
+    2) Load Case | Pu [kN] | Hx [kN] | Hy [kN]
+    3) Pu [kN] | Hx [kN] | Hy [kN]
+    Header row is recommended but not mandatory.
+    """
+    text = str(paste_text or "").strip()
+    if not text:
+        raise ValueError("No pasted load-case data found.")
+
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        raise ValueError("No pasted load-case data found.")
+
+    delimiter = "\t" if any("\t" in ln for ln in lines) else ","
+    rows = [[cell.strip() for cell in ln.split(delimiter)] for ln in lines]
+    rows = [row for row in rows if any(cell.strip() for cell in row)]
+    max_cols = max(len(row) for row in rows)
+    rows = [row + [""] * (max_cols - len(row)) for row in rows]
+
+    def norm_header(h):
+        h = str(h).strip().lower()
+        h = h.replace(" ", "").replace("_", "").replace("-", "")
+        h = h.replace("[", "").replace("]", "").replace("(", "").replace(")", "")
+        return h
+
+    header_norm = [norm_header(c) for c in rows[0]]
+    header_alias = {
+        "use": "Use",
+        "loadcase": "Load Case",
+        "case": "Load Case",
+        "lc": "Load Case",
+        "pukn": "Pu [kN]",
+        "pu": "Pu [kN]",
+        "axial": "Pu [kN]",
+        "axialload": "Pu [kN]",
+        "hxkn": "Hx [kN]",
+        "hx": "Hx [kN]",
+        "hykn": "Hy [kN]",
+        "hy": "Hy [kN]",
+    }
+    mapped = [header_alias.get(h, "") for h in header_norm]
+    has_header = any(mapped)
+
+    records = []
+    if has_header:
+        body = rows[1:]
+        col_map = {canonical: i for i, canonical in enumerate(mapped) if canonical}
+        missing = [c for c in ["Pu [kN]", "Hx [kN]", "Hy [kN]"] if c not in col_map]
+        if missing:
+            raise ValueError("Header was detected, but these columns are missing: " + ", ".join(missing))
+        for r in body:
+            records.append({
+                "Use": r[col_map["Use"]] if "Use" in col_map else True,
+                "Load Case": r[col_map["Load Case"]] if "Load Case" in col_map else "",
+                "Pu [kN]": r[col_map["Pu [kN]"]],
+                "Hx [kN]": r[col_map["Hx [kN]"]],
+                "Hy [kN]": r[col_map["Hy [kN]"]],
+            })
+    else:
+        body = rows
+        ncols = max_cols
+        if ncols >= 5:
+            for r in body:
+                records.append({"Use": r[0], "Load Case": r[1], "Pu [kN]": r[2], "Hx [kN]": r[3], "Hy [kN]": r[4]})
+        elif ncols == 4:
+            for r in body:
+                records.append({"Use": True, "Load Case": r[0], "Pu [kN]": r[1], "Hx [kN]": r[2], "Hy [kN]": r[3]})
+        elif ncols == 3:
+            for r in body:
+                records.append({"Use": True, "Load Case": "", "Pu [kN]": r[0], "Hx [kN]": r[1], "Hy [kN]": r[2]})
+        else:
+            raise ValueError("Paste at least Pu [kN], Hx [kN], and Hy [kN] columns.")
+
+    parsed = clean_pile_load_cases(pd.DataFrame(records), drop_blank=True)
+    if parsed.empty:
+        raise ValueError("The pasted table did not contain any usable load cases.")
+    return parsed
 
 def validate_soil_profile(df):
     """Validate gaps, overlaps, and depth order in the soil profile."""
@@ -2456,7 +2607,40 @@ with tab4:
             "Hy [kN]": [0.0, 200.0, 120.0],
         })
         if "pile_design_load_cases" not in st.session_state:
-            st.session_state["pile_design_load_cases"] = default_load_cases
+            st.session_state["pile_design_load_cases"] = default_load_cases.copy()
+
+        with st.expander("Paste formatted load cases from Excel", expanded=False):
+            st.caption(
+                "Recommended Excel format: Use | Load Case | Pu [kN] | Hx [kN] | Hy [kN]. "
+                "You may also paste only Load Case | Pu [kN] | Hx [kN] | Hy [kN]."
+            )
+            paste_text = st.text_area(
+                "Paste Excel cells here",
+                value="",
+                height=140,
+                placeholder=(
+                    "Use\tLoad Case\tPu [kN]\tHx [kN]\tHy [kN]\n"
+                    "TRUE\tLC1\t1500\t200\t0\n"
+                    "TRUE\tLC2\t1800\t0\t200"
+                ),
+                key="pile_design_load_case_paste_text",
+            )
+            imp_col1, imp_col2, imp_col3 = st.columns([1.0, 1.0, 2.0])
+            if imp_col1.button("Import pasted table", use_container_width=True):
+                try:
+                    imported_cases = parse_pasted_load_cases(paste_text)
+                    st.session_state["pile_design_load_cases"] = imported_cases.copy()
+                    if "pile_design_load_case_editor" in st.session_state:
+                        del st.session_state["pile_design_load_case_editor"]
+                    st.success(f"Imported {len(imported_cases)} load cases from Excel paste.")
+                except Exception as e:
+                    st.error(f"Cannot import pasted load cases: {e}")
+            if imp_col2.button("Reset default cases", use_container_width=True):
+                st.session_state["pile_design_load_cases"] = default_load_cases.copy()
+                if "pile_design_load_case_editor" in st.session_state:
+                    del st.session_state["pile_design_load_case_editor"]
+                st.info("Default load cases restored.")
+            imp_col3.caption("Import replaces the current load-case table only. Calculation formulas are unchanged.")
 
         load_case_input = st.data_editor(
             st.session_state["pile_design_load_cases"],
@@ -2472,18 +2656,9 @@ with tab4:
                 "Hy [kN]": st.column_config.NumberColumn("Pile-head shear Hy [kN]", format="%.1f"),
             }
         )
-        st.session_state["pile_design_load_cases"] = load_case_input.copy()
 
-        load_cases = load_case_input.copy()
-        for col in ["Pu [kN]", "Hx [kN]", "Hy [kN]"]:
-            load_cases[col] = pd.to_numeric(load_cases[col], errors="coerce").fillna(0.0)
-        if "Use" not in load_cases:
-            load_cases["Use"] = True
-        load_cases["Use"] = load_cases["Use"].fillna(True).astype(bool)
-        load_cases["Load Case"] = load_cases["Load Case"].astype(str).replace({"nan": ""})
-        for idx in load_cases.index:
-            if not load_cases.loc[idx, "Load Case"].strip():
-                load_cases.loc[idx, "Load Case"] = f"LC{idx + 1}"
+        load_cases = clean_pile_load_cases(load_case_input, drop_blank=True)
+        st.session_state["pile_design_load_cases"] = load_cases.copy()
         active_cases = load_cases[load_cases["Use"]].copy().reset_index(drop=True)
 
         st.subheader("Reinforcement and ACI PMM Settings")
