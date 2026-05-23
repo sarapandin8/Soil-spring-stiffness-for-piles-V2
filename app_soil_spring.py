@@ -7,7 +7,65 @@ import json
 
 st.set_page_config(page_title="Pile Soil Spring Calculator", layout="wide", page_icon="P")
 
-VERSION = 19  # bumped: include tension-side phi-PMM surface + uplift/tension utilization check
+
+# --- UI STYLE: stronger, larger navigation tabs (display only; no calculation impact) ---
+st.markdown(
+    """
+    <style>
+    /* Make top tab navigation larger and easier to read */
+    div[data-testid="stTabs"] > div[role="tablist"] {
+        gap: 8px;
+        border-bottom: 2px solid #d6dde8;
+        padding: 0.25rem 0 0.15rem 0;
+        margin-bottom: 1.25rem;
+        overflow-x: auto;
+    }
+
+    div[data-testid="stTabs"] button[role="tab"] {
+        min-height: 48px;
+        padding: 12px 18px;
+        border-radius: 10px 10px 0 0;
+        border: 1px solid #d6dde8;
+        border-bottom: 0;
+        background: #f3f6fb;
+        color: #263445;
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        box-shadow: 0 1px 2px rgba(20, 40, 70, 0.06);
+        transition: all 0.12s ease-in-out;
+    }
+
+    div[data-testid="stTabs"] button[role="tab"]:hover {
+        background: #e7eef9;
+        color: #0f3f7a;
+        border-color: #b9c9df;
+    }
+
+    div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+        background: linear-gradient(180deg, #ff4b4b 0%, #d92f2f 100%);
+        color: #ffffff;
+        border-color: #c92a2a;
+        box-shadow: 0 3px 8px rgba(217, 47, 47, 0.28);
+        transform: translateY(1px);
+    }
+
+    div[data-testid="stTabs"] button[role="tab"] p {
+        font-size: 17px;
+        font-weight: 700;
+        margin: 0;
+        white-space: nowrap;
+    }
+
+    div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] p {
+        color: #ffffff;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+VERSION = 21  # bumped: improve tab navigation styling only
 
 #  CONSTANTS
 WIDGET_KEYS = [
