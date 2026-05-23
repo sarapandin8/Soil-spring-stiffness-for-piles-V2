@@ -1033,17 +1033,33 @@ def pile_rebar_section_figure(
         title = f"Pile Design Section - Rectangular ({2 * (nb + nh) - 4} {main_bar})"
         lim = max(B, H) * 0.95
 
+    # Draw reinforcing bars using actual engineering size in plot coordinates.
+    # Previous versions used Plotly marker.size (pixels), which made DB bars look
+    # visually oversized when the section was zoomed.  Shapes below are defined
+    # in metres, so DB28 is plotted as a 0.028 m diameter circle, independent of
+    # screen resolution.  This is a display-only change; structural calculations
+    # still use get_rebar_layout() and REBAR_DB areas.
     if bar_coords:
-        bx, by = zip(*bar_coords)
+        bar_radius_m = main_dia_m / 2.0
+        for bx, by in bar_coords:
+            fig.add_shape(
+                type="circle",
+                x0=bx - bar_radius_m,
+                x1=bx + bar_radius_m,
+                y0=by - bar_radius_m,
+                y1=by + bar_radius_m,
+                line=dict(color="#8f2f1f", width=1.2),
+                fillcolor="#c0392b",
+                layer="above",
+            )
+        # Tiny centre points keep hover/cursor behaviour stable without
+        # controlling the displayed bar diameter.
+        bx_vals, by_vals = zip(*bar_coords)
         fig.add_trace(go.Scatter(
-            x=bx,
-            y=by,
+            x=bx_vals,
+            y=by_vals,
             mode="markers",
-            marker=dict(
-                size=max(main_dia_mm * 0.75, 10),
-                color="#c0392b",
-                line=dict(color="white", width=1)
-            ),
+            marker=dict(size=2, color="#c0392b", opacity=0.0),
             showlegend=False,
             hoverinfo="skip"
         ))
