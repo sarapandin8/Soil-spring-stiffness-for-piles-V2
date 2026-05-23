@@ -7,7 +7,7 @@ import json
 
 st.set_page_config(page_title="Pile Soil Spring Calculator", layout="wide", page_icon="P")
 
-VERSION = 16  # bumped: faster Pile Design PMM checks + default governing-only plots
+VERSION = 17  # bumped: faster Pile Design PMM checks + default governing-only plots
 
 #  CONSTANTS
 WIDGET_KEYS = [
@@ -2793,8 +2793,9 @@ with tab4:
                 EI_x_loading = Ep * Ipy
                 EI_y_loading = Ep * Ipx
 
-                for case_idx, case in active_cases.iterrows():
+                for case_no, (_, case) in enumerate(active_cases.iterrows(), start=1):
                     lc = str(case["Load Case"])
+                    case_plot_label = f"{case_no:03d} - {lc}"
                     pu_kN = float(case["Pu [kN]"])
                     hx_kN = float(case["Hx [kN]"])
                     hy_kN = float(case["Hy [kN]"])
@@ -2813,6 +2814,8 @@ with tab4:
                     shear_resultant = np.sqrt(shear_x**2 + shear_y**2)
                     moment_resultant = np.sqrt(moment_x**2 + moment_y**2)
                     frame = pd.DataFrame({
+                        "Case No.": case_no,
+                        "Case Plot Label": case_plot_label,
                         "Load Case": lc,
                         "Depth [m]": depths,
                         "Pu [kN]": axial,
@@ -2874,6 +2877,8 @@ with tab4:
                         "status": "No PMM check",
                     }
                     summary_rows.append({
+                        "Case No.": case_no,
+                        "Case Plot Label": case_plot_label,
                         "Load Case": lc,
                         "Max Pu [kN]": float(np.max(axial)),
                         "Min Pu [kN]": float(np.min(axial)),
@@ -2952,7 +2957,7 @@ with tab4:
                     with right_design:
                         st.subheader("Load Case Results")
                         st.dataframe(
-                            demand_df.style.format({
+                            demand_df.drop(columns=["Case Plot Label"], errors="ignore").style.format({
                                 "Max Pu [kN]": "{:,.1f}",
                                 "Min Pu [kN]": "{:,.1f}",
                                 "Max |Mux| [kN-m]": "{:,.1f}",
@@ -2987,8 +2992,8 @@ with tab4:
                         )
 
                     st.subheader("Force Diagrams Along Pile")
-                    force_case_names = demand_df["Load Case"].tolist()
-                    governing_case_name = str(governing["Load Case"]) if governing is not None else (force_case_names[0] if force_case_names else "")
+                    force_case_labels = demand_df["Case Plot Label"].astype(str).tolist()
+                    governing_case_label = str(governing["Case Plot Label"]) if governing is not None else (force_case_labels[0] if force_case_labels else "")
                     plot_mode = st.radio(
                         "Force diagram display",
                         ["Governing case only", "Selected case only", "All active cases"],
@@ -2999,23 +3004,24 @@ with tab4:
                     if plot_mode == "Selected case only":
                         selected_force_case = st.selectbox(
                             "Force diagram load case",
-                            force_case_names,
-                            index=force_case_names.index(governing_case_name) if governing_case_name in force_case_names else 0,
+                            force_case_labels,
+                            index=force_case_labels.index(governing_case_label) if governing_case_label in force_case_labels else 0,
                         )
-                        plot_profile_df = profile_df[profile_df["Load Case"].astype(str) == str(selected_force_case)].copy()
+                        plot_profile_df = profile_df[profile_df["Case Plot Label"].astype(str) == str(selected_force_case)].copy()
                     elif plot_mode == "All active cases":
                         plot_profile_df = profile_df.copy()
-                        if len(force_case_names) > 20:
+                        if len(force_case_labels) > 20:
                             st.warning("Many load cases are selected for plotting. Switch back to governing/selected mode if the page feels slow.")
                     else:
-                        plot_profile_df = profile_df[profile_df["Load Case"].astype(str) == str(governing_case_name)].copy()
+                        plot_profile_df = profile_df[profile_df["Case Plot Label"].astype(str) == str(governing_case_label)].copy()
 
                     symbols = ["circle", "square", "diamond", "triangle-up", "cross", "x", "star", "hexagon", "triangle-down", "pentagon"]
                     colors = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22"]
 
                     def _force_figure(x_col, title, x_title):
                         fig = go.Figure()
-                        for i, (lc, grp) in enumerate(plot_profile_df.groupby("Load Case", sort=False)):
+                        for i, (lc, grp) in enumerate(plot_profile_df.groupby("Case Plot Label", sort=False)):
+                            grp = grp.sort_values("Depth [m]").copy()
                             fig.add_trace(go.Scatter(
                                 x=grp[x_col],
                                 y=grp["Depth [m]"],
@@ -3023,6 +3029,7 @@ with tab4:
                                 name=str(lc),
                                 line=dict(color=colors[i % len(colors)], width=2),
                                 marker=dict(symbol=symbols[i % len(symbols)], size=7),
+                                connectgaps=False,
                             ))
                         fig.update_layout(
                             height=410,
@@ -3133,11 +3140,12 @@ with tab4:
                     governing_index = int(demand_df["PMM Util."].idxmax()) if not demand_df.empty else 0
                     slice_case = st.selectbox(
                         "PMM slice load case",
-                        demand_df["Load Case"].tolist(),
+                        demand_df["Case Plot Label"].astype(str).tolist(),
                         index=governing_index,
                         help="The Mux-Muy slice is drawn at the selected load case Pu."
                     )
-                    slice_row = demand_df[demand_df["Load Case"] == slice_case].iloc[0]
+                    slice_row = demand_df[demand_df["Case Plot Label"].astype(str) == str(slice_case)].iloc[0]
+                    slice_case_name = str(slice_row["Load Case"])
                     slice_pu = float(slice_row["Max Pu [kN]"])
                     slice_df = pmm_slice_at_p(pmm_df, slice_pu)
                     demand_mx = float(slice_row["PMM Mux [kN-m]"])
@@ -3166,7 +3174,7 @@ with tab4:
                         y=[demand_my],
                         mode="markers+text",
                         marker=dict(symbol="x", color="#1b6b6b", size=13, line=dict(width=3)),
-                        text=[f"{slice_case}<br>U={slice_row['PMM Util.']:.3f}"],
+                        text=[f"{slice_case_name}<br>U={slice_row['PMM Util.']:.3f}"],
                         textposition="bottom right",
                         name="demand"
                     ))
@@ -3287,8 +3295,8 @@ with tab4:
                                     util = float(row["PMM Util."])
                                     status = "NG" if util > 1.0 else "OK"
                                     status_color = "red" if util > 1.0 else "green"
-                                    selected_badge = " (selected)" if str(row["Load Case"]) == str(slice_case) else ""
-                                    st.markdown(f"**{row['Load Case']}{selected_badge}**")
+                                    selected_badge = " (selected)" if str(row["Case Plot Label"]) == str(slice_case) else ""
+                                    st.markdown(f"**{row['Case Plot Label']}{selected_badge}**")
                                     st.markdown(f"U = :{status_color}[**{util:.3f} ({status})**]")
                                     st.caption(
                                         f"Pu = {float(row['Max Pu [kN]']):,.1f} kN  \n"
@@ -3298,7 +3306,7 @@ with tab4:
                                     st.divider()
                     with st.expander("Detailed force table", expanded=False):
                         st.dataframe(
-                            profile_df.style.format({
+                            profile_df.drop(columns=["Case Plot Label"], errors="ignore").style.format({
                                 "Depth [m]": "{:.2f}",
                                 "Pu [kN]": "{:,.1f}",
                                 "Vx [kN]": "{:,.1f}",
