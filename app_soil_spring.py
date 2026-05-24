@@ -65,7 +65,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-VERSION = 23  # bumped: E.1 pile-head boundary condition options
+VERSION = 24  # E.3: head-boundary sensitivity check
 
 #  CONSTANTS
 WIDGET_KEYS = [
@@ -2838,35 +2838,89 @@ with tab4:
             rowy_col.metric("Y pile row", "Average")
 
         st.subheader("Pile Head Boundary Condition")
-        bc1, bc2 = st.columns([1.2, 1.0])
+        bc1, bc2, bc3 = st.columns([1.25, 1.15, 1.0])
         head_condition = bc1.selectbox(
             "Head condition",
             ["Free Head / Shear Only", "Fixed Head (theta = 0)", "Rotational Spring"],
-            index=0,
+            index=1,
             help=(
                 "Free Head applies Hx/Hy with zero external head moment. "
                 "Fixed Head restrains pile-head rotation and solves the reaction moment internally. "
                 "Rotational Spring adds Kθ at the pile head."
             ),
         )
+
+        ktheta_presets = {
+            "Low restraint — 10,000": 1.0e4,
+            "Medium restraint — 100,000": 1.0e5,
+            "High restraint — 1,000,000": 1.0e6,
+            "Nearly fixed — 10,000,000": 1.0e7,
+            "Custom": None,
+        }
+
         if head_condition == "Rotational Spring":
-            ktheta_head = bc2.number_input(
-                "Kθ head [kN-m/rad]",
-                min_value=0.0,
-                value=1.0e6,
-                step=1.0e5,
-                format="%.3g",
-                help="Rotational spring stiffness at pile head. Use 0 to approach free-head behavior.",
+            ktheta_preset = bc2.selectbox(
+                "Kθ preset",
+                list(ktheta_presets.keys()),
+                index=1,
+                help=(
+                    "Trial rotational restraint values. These are modelling parameters, not fixed code values. "
+                    "Run a sensitivity check against Free Head and Fixed Head for final design."
+                ),
             )
+            if ktheta_presets[ktheta_preset] is None:
+                ktheta_head = bc3.number_input(
+                    "Custom Kθ [kN-m/rad]",
+                    min_value=0.0,
+                    value=1.0e5,
+                    step=1.0e4,
+                    format="%.3g",
+                    help="Custom pile-head rotational spring stiffness. Use 0 to approach free-head behavior.",
+                )
+            else:
+                ktheta_head = float(ktheta_presets[ktheta_preset])
+                bc3.metric("Kθ used [kN-m/rad]", f"{ktheta_head:,.0f}")
         else:
             ktheta_head = 0.0
-            bc2.metric("Kθ head [kN-m/rad]", "—")
+            bc2.metric("Kθ preset", "—")
+            bc3.metric("Kθ used [kN-m/rad]", "—")
+
         if head_condition == "Free Head / Shear Only":
             st.caption("Assumption: applied Hx/Hy act at the pile head with free rotation; Mhead = 0 unless future optional head moment is introduced.")
         elif head_condition == "Fixed Head (theta = 0)":
-            st.caption("Assumption: pile cap restrains pile-head rotation. The app solves the head reaction moment; do not also add external Mux/Muy from another model.")
+            st.caption("Recommended for a pile embedded in a rigid pile cap when no external head moment is supplied. The app solves the head reaction moment internally; do not also add external Mux/Muy from another model.")
         else:
-            st.caption("Assumption: semi-rigid pile-cap restraint represented by a rotational spring at the pile head.")
+            st.info(
+                "Recommended Kθ trial values: 10,000 = low restraint, 100,000 = medium restraint, "
+                "1,000,000 = high restraint, 10,000,000 = nearly fixed. "
+                "Kθ is not a code-prescribed constant; compare Free Head, Fixed Head, and the selected rotational spring as a sensitivity check."
+            )
+
+        sens_col1, sens_col2 = st.columns([1.0, 1.4])
+        run_head_sensitivity = sens_col1.checkbox(
+            "Run head-condition sensitivity",
+            value=False,
+            help=(
+                "Compare Free Head, rotational springs, and Fixed Head for the same load demand. "
+                "This is recommended when the pile-cap rotational restraint is uncertain."
+            ),
+        )
+        if run_head_sensitivity:
+            sensitivity_scope = sens_col2.selectbox(
+                "Sensitivity scope",
+                ["Governing case from current design", "All active load cases"],
+                index=0,
+                help=(
+                    "Governing case is faster and easier to read. All active load cases provides an envelope, "
+                    "but can be slower when many cases are imported."
+                ),
+            )
+            st.caption(
+                "Sensitivity compares: Free Head, Kθ = 10k / 100k / 1,000k kN-m/rad, and Fixed Head. "
+                "Use it to bracket pile-head moment and displacement; it does not change the selected design condition above."
+            )
+        else:
+            sensitivity_scope = "Governing case from current design"
 
         st.subheader("Load Cases")
         default_load_cases = pd.DataFrame({
@@ -3320,6 +3374,266 @@ with tab4:
                             - **Uplift check:** φTn = `0.90·ΣAsfy = {phi_tn_kN:,.1f} kN`; Overall U = max(PMM U, Tension U).
                             """
                         )
+
+                    if run_head_sensitivity:
+                        st.subheader("Head Boundary Sensitivity Check")
+                        st.caption(
+                            "This comparison brackets the pile response for uncertain pile-cap rotational restraint. "
+                            "For final design, review whether the governing demand is controlled by free-head displacement "
+                            "or fixed/semi-fixed head bending moment."
+                        )
+
+                        sensitivity_cases = []
+                        if sensitivity_scope == "All active load cases":
+                            sensitivity_cases = [case for _, case in active_cases.iterrows()]
+                            if len(sensitivity_cases) > 30:
+                                st.warning(
+                                    "Sensitivity is running for more than 30 active cases. "
+                                    "Consider using the governing-case scope to keep the table readable."
+                                )
+                        else:
+                            if governing is not None and not active_cases.empty:
+                                try:
+                                    gov_case_idx = int(governing.get("Case No.", 1)) - 1
+                                    gov_case_idx = min(max(gov_case_idx, 0), len(active_cases) - 1)
+                                    sensitivity_cases = [active_cases.iloc[gov_case_idx]]
+                                except Exception:
+                                    sensitivity_cases = [active_cases.iloc[0]]
+
+                        sensitivity_scenarios = [
+                            ("Free Head", "Free Head / Shear Only", 0.0),
+                            ("Kθ = 10,000", "Rotational Spring", 1.0e4),
+                            ("Kθ = 100,000", "Rotational Spring", 1.0e5),
+                            ("Kθ = 1,000,000", "Rotational Spring", 1.0e6),
+                            ("Fixed Head", "Fixed Head (theta = 0)", 0.0),
+                        ]
+
+                        sensitivity_rows = []
+                        sensitivity_profiles = []
+                        sensitivity_error = None
+                        for case in sensitivity_cases:
+                            lc = str(case["Load Case"])
+                            pu_kN = float(case["Pu [kN]"])
+                            hx_kN = float(case["Hx [kN]"])
+                            hy_kN = float(case["Hy [kN]"])
+                            for scenario_label, scenario_condition, scenario_ktheta in sensitivity_scenarios:
+                                try:
+                                    s_disp_x, s_theta_x, _s_rx, s_shear_x, s_moment_y, s_mhead_y = solve_pile_lateral_response(
+                                        depths, spring_k_x, EI_x_loading,
+                                        head_shear=hx_kN, head_moment=0.0,
+                                        head_condition=scenario_condition,
+                                        rotational_stiffness=scenario_ktheta,
+                                    )
+                                    s_disp_y, s_theta_y, _s_ry, s_shear_y, s_moment_x, s_mhead_x = solve_pile_lateral_response(
+                                        depths, spring_k_y, EI_y_loading,
+                                        head_shear=hy_kN, head_moment=0.0,
+                                        head_condition=scenario_condition,
+                                        rotational_stiffness=scenario_ktheta,
+                                    )
+                                except Exception as exc:
+                                    sensitivity_error = f"{lc} / {scenario_label}: {exc}"
+                                    break
+
+                                s_disp_res_mm = np.sqrt(s_disp_x**2 + s_disp_y**2) * 1000.0
+                                s_shear_res = np.sqrt(s_shear_x**2 + s_shear_y**2)
+                                s_moment_res = np.sqrt(s_moment_x**2 + s_moment_y**2)
+                                im = int(np.argmax(np.abs(s_moment_res))) if len(s_moment_res) else 0
+                                idisp = int(np.argmax(np.abs(s_disp_res_mm))) if len(s_disp_res_mm) else 0
+                                iv = int(np.argmax(np.abs(s_shear_res))) if len(s_shear_res) else 0
+
+                                if pmm_finite.empty:
+                                    s_util_profile = np.full(len(depths), np.inf, dtype=float)
+                                else:
+                                    pu_use, pu_out_status = clamp_pu_to_pmm_range(pu_kN, pmm_p_min, pmm_p_max, pmm_p_tol)
+                                    if pu_out_status:
+                                        s_slice_for_case = pd.DataFrame()
+                                    else:
+                                        cache_key = round(float(pu_use), 6)
+                                        if cache_key not in pmm_slice_cache:
+                                            pmm_slice_cache[cache_key] = pmm_slice_at_p(pmm_finite, pu_use)
+                                        s_slice_for_case = pmm_slice_cache[cache_key]
+                                    s_checks = [
+                                        pmm_utilization_from_slice(s_slice_for_case, pu_use, mx, my, pu_out_status)
+                                        for mx, my in zip(s_moment_x, s_moment_y)
+                                    ]
+                                    s_util_profile = np.asarray([chk["utilization"] for chk in s_checks], dtype=float)
+                                    s_util_profile = np.where(np.isfinite(s_util_profile), s_util_profile, np.inf)
+
+                                s_tension_util, _s_tension_status = tension_utilization_for_pu(pu_kN, phi_tn_kN)
+                                s_pmm_util = float(np.max(s_util_profile)) if len(s_util_profile) else np.inf
+                                s_overall_util = max(s_pmm_util, float(s_tension_util))
+                                sensitivity_rows.append({
+                                    "Load Case": lc,
+                                    "Scenario": scenario_label,
+                                    "Head Condition": scenario_condition,
+                                    "Kθ [kN-m/rad]": float(scenario_ktheta),
+                                    "Pu [kN]": pu_kN,
+                                    "Hx [kN]": hx_kN,
+                                    "Hy [kN]": hy_kN,
+                                    "Head disp. [mm]": float(s_disp_res_mm[0]) if len(s_disp_res_mm) else 0.0,
+                                    "Max disp. [mm]": float(np.max(np.abs(s_disp_res_mm))) if len(s_disp_res_mm) else 0.0,
+                                    "z @ max disp. [m]": float(depths[idisp]) if len(depths) else 0.0,
+                                    "Mhead X [kN-m]": float(s_mhead_x),
+                                    "Mhead Y [kN-m]": float(s_mhead_y),
+                                    "Mhead resultant [kN-m]": float(np.hypot(s_mhead_x, s_mhead_y)),
+                                    "Max |Mux| [kN-m]": float(np.max(np.abs(s_moment_x))) if len(s_moment_x) else 0.0,
+                                    "Max |Muy| [kN-m]": float(np.max(np.abs(s_moment_y))) if len(s_moment_y) else 0.0,
+                                    "Max |M| [kN-m]": float(np.max(np.abs(s_moment_res))) if len(s_moment_res) else 0.0,
+                                    "z @ max M [m]": float(depths[im]) if len(depths) else 0.0,
+                                    "Max |V| [kN]": float(np.max(np.abs(s_shear_res))) if len(s_shear_res) else 0.0,
+                                    "z @ max V [m]": float(depths[iv]) if len(depths) else 0.0,
+                                    "PMM Util.": s_pmm_util,
+                                    "Tension Util.": float(s_tension_util),
+                                    "Overall Util.": float(s_overall_util),
+                                    "Status": "OK" if s_overall_util <= 1.0 else "NG",
+                                })
+
+                                if sensitivity_scope == "Governing case from current design":
+                                    sensitivity_profiles.append(pd.DataFrame({
+                                        "Scenario": scenario_label,
+                                        "Depth [m]": depths,
+                                        "M resultant [kN-m]": s_moment_res,
+                                        "Disp resultant [mm]": s_disp_res_mm,
+                                    }))
+                            if sensitivity_error:
+                                break
+
+                        if sensitivity_error:
+                            st.error(f"Head-boundary sensitivity could not run: {sensitivity_error}")
+                        elif sensitivity_rows:
+                            sensitivity_df = pd.DataFrame(sensitivity_rows)
+                            if sensitivity_scope == "All active load cases":
+                                envelope_df = (
+                                    sensitivity_df
+                                    .groupby(["Scenario", "Head Condition", "Kθ [kN-m/rad]"], as_index=False)
+                                    .agg({
+                                        "Head disp. [mm]": "max",
+                                        "Max disp. [mm]": "max",
+                                        "Mhead resultant [kN-m]": "max",
+                                        "Max |Mux| [kN-m]": "max",
+                                        "Max |Muy| [kN-m]": "max",
+                                        "Max |M| [kN-m]": "max",
+                                        "Max |V| [kN]": "max",
+                                        "PMM Util.": "max",
+                                        "Tension Util.": "max",
+                                        "Overall Util.": "max",
+                                    })
+                                )
+                                envelope_df["Status"] = np.where(envelope_df["Overall Util."] <= 1.0, "OK", "NG")
+                                st.markdown("**Sensitivity envelope across all active load cases**")
+                                st.dataframe(
+                                    envelope_df.style.format({
+                                        "Kθ [kN-m/rad]": "{:,.0f}",
+                                        "Head disp. [mm]": "{:,.2f}",
+                                        "Max disp. [mm]": "{:,.2f}",
+                                        "Mhead resultant [kN-m]": "{:,.1f}",
+                                        "Max |Mux| [kN-m]": "{:,.1f}",
+                                        "Max |Muy| [kN-m]": "{:,.1f}",
+                                        "Max |M| [kN-m]": "{:,.1f}",
+                                        "Max |V| [kN]": "{:,.1f}",
+                                        "PMM Util.": "{:.3f}",
+                                        "Tension Util.": "{:.3f}",
+                                        "Overall Util.": "{:.3f}",
+                                    }),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
+                                with st.expander("Detailed sensitivity by load case", expanded=False):
+                                    st.dataframe(
+                                        sensitivity_df.style.format({
+                                            "Kθ [kN-m/rad]": "{:,.0f}",
+                                            "Pu [kN]": "{:,.1f}",
+                                            "Hx [kN]": "{:,.1f}",
+                                            "Hy [kN]": "{:,.1f}",
+                                            "Head disp. [mm]": "{:,.2f}",
+                                            "Max disp. [mm]": "{:,.2f}",
+                                            "z @ max disp. [m]": "{:.2f}",
+                                            "Mhead X [kN-m]": "{:,.1f}",
+                                            "Mhead Y [kN-m]": "{:,.1f}",
+                                            "Mhead resultant [kN-m]": "{:,.1f}",
+                                            "Max |Mux| [kN-m]": "{:,.1f}",
+                                            "Max |Muy| [kN-m]": "{:,.1f}",
+                                            "Max |M| [kN-m]": "{:,.1f}",
+                                            "z @ max M [m]": "{:.2f}",
+                                            "Max |V| [kN]": "{:,.1f}",
+                                            "z @ max V [m]": "{:.2f}",
+                                            "PMM Util.": "{:.3f}",
+                                            "Tension Util.": "{:.3f}",
+                                            "Overall Util.": "{:.3f}",
+                                        }),
+                                        use_container_width=True,
+                                        hide_index=True,
+                                    )
+                            else:
+                                st.dataframe(
+                                    sensitivity_df.style.format({
+                                        "Kθ [kN-m/rad]": "{:,.0f}",
+                                        "Pu [kN]": "{:,.1f}",
+                                        "Hx [kN]": "{:,.1f}",
+                                        "Hy [kN]": "{:,.1f}",
+                                        "Head disp. [mm]": "{:,.2f}",
+                                        "Max disp. [mm]": "{:,.2f}",
+                                        "z @ max disp. [m]": "{:.2f}",
+                                        "Mhead X [kN-m]": "{:,.1f}",
+                                        "Mhead Y [kN-m]": "{:,.1f}",
+                                        "Mhead resultant [kN-m]": "{:,.1f}",
+                                        "Max |Mux| [kN-m]": "{:,.1f}",
+                                        "Max |Muy| [kN-m]": "{:,.1f}",
+                                        "Max |M| [kN-m]": "{:,.1f}",
+                                        "z @ max M [m]": "{:.2f}",
+                                        "Max |V| [kN]": "{:,.1f}",
+                                        "z @ max V [m]": "{:.2f}",
+                                        "PMM Util.": "{:.3f}",
+                                        "Tension Util.": "{:.3f}",
+                                        "Overall Util.": "{:.3f}",
+                                    }),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
+
+                                if sensitivity_profiles:
+                                    sens_profile_df = pd.concat(sensitivity_profiles, ignore_index=True)
+                                    cs1, cs2 = st.columns(2)
+                                    fig_m_sens = go.Figure()
+                                    fig_d_sens = go.Figure()
+                                    for scenario, grp in sens_profile_df.groupby("Scenario", sort=False):
+                                        grp = grp.sort_values("Depth [m]")
+                                        fig_m_sens.add_trace(go.Scatter(
+                                            x=grp["M resultant [kN-m]"],
+                                            y=grp["Depth [m]"],
+                                            mode="lines+markers",
+                                            name=str(scenario),
+                                        ))
+                                        fig_d_sens.add_trace(go.Scatter(
+                                            x=grp["Disp resultant [mm]"],
+                                            y=grp["Depth [m]"],
+                                            mode="lines+markers",
+                                            name=str(scenario),
+                                        ))
+                                    fig_m_sens.update_layout(
+                                        height=360,
+                                        title="Sensitivity: Moment Resultant",
+                                        yaxis=dict(autorange="reversed", title="Depth [m]"),
+                                        xaxis=dict(title="M resultant [kN-m]", zeroline=True),
+                                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                                        margin=dict(l=10, r=10, t=45, b=10),
+                                    )
+                                    fig_d_sens.update_layout(
+                                        height=360,
+                                        title="Sensitivity: Displacement Resultant",
+                                        yaxis=dict(autorange="reversed", title="Depth [m]"),
+                                        xaxis=dict(title="Displacement [mm]", zeroline=True),
+                                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                                        margin=dict(l=10, r=10, t=45, b=10),
+                                    )
+                                    cs1.plotly_chart(fig_m_sens, use_container_width=True)
+                                    cs2.plotly_chart(fig_d_sens, use_container_width=True)
+
+                            st.info(
+                                "Interpretation: Free Head generally bounds larger rotation/displacement behavior, "
+                                "while Fixed Head generally increases head-restraint moment. Use the selected design condition "
+                                "only after confirming it is compatible with the actual pile-cap stiffness/detailing."
+                            )
 
                     st.subheader("Force Diagrams Along Pile")
                     force_case_labels = demand_df["Case Plot Label"].astype(str).tolist()
