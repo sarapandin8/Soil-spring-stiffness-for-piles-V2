@@ -65,7 +65,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-VERSION = 28  # V.1: verification benchmark test cases / regression checks
+VERSION = 29  # D.1: add displacement diagrams along pile in Pile Design
 
 #  CONSTANTS
 WIDGET_KEYS = [
@@ -2341,6 +2341,310 @@ def build_pile_design_report_xlsx(report):
     return buf.getvalue()
 
 
+
+def _docx_safe_text(value):
+    """Return a compact text value safe for DOCX table cells."""
+    if value is None:
+        return "-"
+    if isinstance(value, (float, np.floating)):
+        if not np.isfinite(value):
+            return "-"
+        return f"{float(value):,.3f}".rstrip("0").rstrip(".")
+    if isinstance(value, (int, np.integer)):
+        return f"{int(value):,}"
+    txt = str(value)
+    if txt.lower() in ("nan", "none", "<na>"):
+        return "-"
+    return txt
+
+
+def _docx_set_cell_shading(cell, fill):
+    """Apply simple cell background shading."""
+    try:
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        tc_pr = cell._tc.get_or_add_tcPr()
+        shd = tc_pr.find(qn("w:shd"))
+        if shd is None:
+            shd = OxmlElement("w:shd")
+            tc_pr.append(shd)
+        shd.set(qn("w:fill"), fill)
+    except Exception:
+        pass
+
+
+def _docx_add_kv_table(doc, title, rows):
+    """Add a two-column key/value table to a Word document."""
+    if title:
+        doc.add_heading(title, level=2)
+    clean_rows = [(str(k), _docx_safe_text(v)) for k, v in rows if str(k).strip()]
+    if not clean_rows:
+        doc.add_paragraph("No data available.")
+        return
+    table = doc.add_table(rows=1, cols=2)
+    table.style = "Table Grid"
+    table.rows[0].cells[0].text = "Item"
+    table.rows[0].cells[1].text = "Value"
+    for cell in table.rows[0].cells:
+        _docx_set_cell_shading(cell, "BDD7EE")
+        for p in cell.paragraphs:
+            for r in p.runs:
+                r.bold = True
+    for k, v in clean_rows:
+        cells = table.add_row().cells
+        cells[0].text = k
+        cells[1].text = v
+
+
+def _docx_add_dataframe(doc, title, df, max_rows=25, max_cols=8):
+    """Add a compact DataFrame table to DOCX, truncating for report readability."""
+    if title:
+        doc.add_heading(title, level=2)
+    if df is None or len(df) == 0:
+        doc.add_paragraph("No data available.")
+        return
+    view = df.copy()
+    if "Case Plot Label" in view.columns:
+        view = view.drop(columns=["Case Plot Label"], errors="ignore")
+    if len(view.columns) > max_cols:
+        view = view.iloc[:, :max_cols].copy()
+        doc.add_paragraph(f"Note: table limited to first {max_cols} columns for report readability.")
+    truncated = len(view) > max_rows
+    if truncated:
+        view = view.head(max_rows).copy()
+    view = view.fillna("")
+    table = doc.add_table(rows=1, cols=len(view.columns))
+    table.style = "Table Grid"
+    hdr = table.rows[0].cells
+    for j, col in enumerate(view.columns):
+        hdr[j].text = str(col)
+        _docx_set_cell_shading(hdr[j], "BDD7EE")
+        for p in hdr[j].paragraphs:
+            for r in p.runs:
+                r.bold = True
+    for _, row in view.iterrows():
+        cells = table.add_row().cells
+        for j, val in enumerate(row.tolist()):
+            cells[j].text = _docx_safe_text(val)
+    if truncated:
+        doc.add_paragraph(f"Note: table truncated to first {max_rows} rows. See QA workbook for complete data.")
+
+
+def _docx_profile_plot_image(profile_df, case_label, columns, title):
+    """Create an in-memory PNG plot for DOCX report from pile profile data."""
+    if profile_df is None or len(profile_df) == 0:
+        return None
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ModuleNotFoundError:
+        return None
+    df = profile_df.copy()
+    if case_label and "Case Plot Label" in df.columns:
+        subset = df[df["Case Plot Label"].astype(str) == str(case_label)].copy()
+        if not subset.empty:
+            df = subset
+    if "Depth [m]" not in df.columns:
+        return None
+    df = df.sort_values("Depth [m]").copy()
+    # Create resultant displacement if requested and not already present.
+    if "Disp resultant [mm]" in columns and "Disp resultant [mm]" not in df.columns:
+        if "Disp X [mm]" in df.columns and "Disp Y [mm]" in df.columns:
+            df["Disp resultant [mm]"] = np.sqrt(
+                pd.to_numeric(df["Disp X [mm]"], errors="coerce").fillna(0.0) ** 2
+                + pd.to_numeric(df["Disp Y [mm]"], errors="coerce").fillna(0.0) ** 2
+            )
+    available = [c for c in columns if c in df.columns]
+    if not available:
+        return None
+    fig, ax = plt.subplots(figsize=(6.6, 4.0), dpi=150)
+    for col in available:
+        x = pd.to_numeric(df[col], errors="coerce")
+        y = pd.to_numeric(df["Depth [m]"], errors="coerce")
+        ax.plot(x, y, marker="o", markersize=2.8, linewidth=1.4, label=col)
+    ax.invert_yaxis()
+    ax.grid(True, alpha=0.30)
+    ax.set_title(title)
+    ax.set_xlabel("Value")
+    ax.set_ylabel("Depth [m]")
+    ax.legend(fontsize=7)
+    fig.tight_layout()
+    buf = BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def build_pile_design_word_report(report):
+    """Build a professional Word DOCX report for the latest pile-design run."""
+    try:
+        from docx import Document
+        from docx.shared import Cm, Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.enum.section import WD_SECTION
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("Missing Word export dependency: python-docx. Install project requirements first.") from exc
+
+    if not report:
+        raise RuntimeError("No pile design report is available. Run pile design first.")
+
+    meta = report.get("meta", {})
+    inputs = report.get("inputs", {})
+    summary = report.get("summary", {})
+    project = report.get("project", {})
+    load_cases = report.get("load_cases", pd.DataFrame())
+    demand_df = report.get("demand_df", pd.DataFrame())
+    profile_df = report.get("profile_df", pd.DataFrame())
+    sensitivity_df = report.get("sensitivity_df", pd.DataFrame())
+    qa_checklist = report.get("qa_checklist", build_pile_design_qa_checklist(report))
+
+    doc = Document()
+    section = doc.sections[0]
+    section.top_margin = Cm(1.6)
+    section.bottom_margin = Cm(1.6)
+    section.left_margin = Cm(1.8)
+    section.right_margin = Cm(1.8)
+
+    normal = doc.styles["Normal"]
+    normal.font.name = "Arial"
+    normal.font.size = Pt(9)
+    for style_name, size, color in [
+        ("Title", 18, RGBColor(0x1A, 0x4F, 0x8A)),
+        ("Heading 1", 13, RGBColor(0x1A, 0x4F, 0x8A)),
+        ("Heading 2", 10.5, RGBColor(0x1A, 0x4F, 0x8A)),
+    ]:
+        style = doc.styles[style_name]
+        style.font.name = "Arial"
+        style.font.size = Pt(size)
+        style.font.bold = True
+        style.font.color.rgb = color
+
+    # Footer
+    footer = section.footer.paragraphs[0]
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = footer.add_run("Pile Soil Spring Design Report | Preliminary Engineering Review")
+    run.font.size = Pt(8)
+    run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+
+    title = doc.add_paragraph()
+    title.style = doc.styles["Title"]
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.add_run("Pile Lateral Soil Spring Design Report")
+    subtitle = doc.add_paragraph()
+    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    subtitle.add_run("Winkler Soil Spring Response | Pile Section Check | QA Traceability").italic = True
+
+    _docx_add_kv_table(doc, "1. Project Information", [
+        ("Project No.", project.get("project_no", "-")),
+        ("Project Title", project.get("project_title", "-")),
+        ("Structure / Location", project.get("structure_name", "-")),
+        ("Designer", project.get("designer", "-")),
+        ("Checker", project.get("checker", "-")),
+        ("Revision", project.get("revision", "-")),
+        ("Generated", meta.get("timestamp", "-")),
+        ("App Version", meta.get("app_version", "-")),
+        ("Load-case source", meta.get("load_case_source", "Manual / in-app table")),
+        ("Calculation notes", project.get("project_notes", "-")),
+    ])
+
+    _docx_add_kv_table(doc, "2. Design Basis and Assumptions", [
+        ("kh method", inputs.get("kh_method", "-")),
+        ("Design stage", inputs.get("design_stage", "-")),
+        ("Spring source", inputs.get("spring_source", "-")),
+        ("Pile-head condition", inputs.get("head_condition", "-")),
+        ("Ktheta head [kN-m/rad]", inputs.get("ktheta_head", 0.0)),
+        ("Design demand basis", inputs.get("design_demand_basis", summary.get("design_demand_basis", "-"))),
+        ("Water table [m]", inputs.get("water_table", 0.0)),
+        ("Scour depth [m]", inputs.get("scour_depth", 0.0)),
+    ])
+    doc.add_paragraph("Fixed Head solves the head reaction moment internally. Do not double-count external pile-head moments from another model.")
+
+    _docx_add_kv_table(doc, "3. Pile Geometry and Reinforcement", [
+        ("Pile type", inputs.get("pile_type", "-")),
+        ("Pile D [m]", inputs.get("D", 0.0)),
+        ("Pile B [m]", inputs.get("B", 0.0)),
+        ("Pile H [m]", inputs.get("H", 0.0)),
+        ("Pile length L [m]", inputs.get("L", 0.0)),
+        ("Concrete fc [MPa]", inputs.get("fc", 0.0)),
+        ("Main reinforcement", inputs.get("main_bar", "-")),
+        ("Provided As [mm2]", summary.get("as_provided_mm2", 0.0)),
+        ("Tie / spiral bar", inputs.get("tie_bar", "-")),
+        ("Tie spacing [mm]", inputs.get("tie_spacing_mm", 0.0)),
+        ("Transverse system", inputs.get("transverse_system", "-")),
+    ])
+
+    _docx_add_dataframe(doc, "4. Load Cases Used", load_cases, max_rows=25, max_cols=6)
+
+    _docx_add_kv_table(doc, "5. Governing Design Summary", [
+        ("Governing load case", summary.get("governing_case", "-")),
+        ("Max Pu [kN]", summary.get("overall_pu_max", 0.0)),
+        ("Min Pu [kN]", summary.get("overall_pu_min", 0.0)),
+        ("Max |Mux| [kN-m]", summary.get("overall_mx", 0.0)),
+        ("Max |Muy| [kN-m]", summary.get("overall_my", 0.0)),
+        ("Max |V| [kN]", summary.get("overall_v", 0.0)),
+        ("Shear/tie demand source", summary.get("shear_design_case", "-")),
+        ("Shear/tie design Pu [kN]", summary.get("shear_design_pu_kN", 0.0)),
+        ("Shear/tie design V [kN]", summary.get("shear_design_v_kN", 0.0)),
+        ("Shear/tie design M [kN-m]", summary.get("shear_design_m_kN_m", 0.0)),
+        ("PMM utilization", summary.get("max_pmm_util", 0.0)),
+        ("Tension utilization", summary.get("max_tension_util", 0.0)),
+        ("Overall utilization", summary.get("max_util", 0.0)),
+        ("Overall status", summary.get("overall_status", "-")),
+    ])
+
+    _docx_add_dataframe(doc, "6. Load Case Result Table", demand_df, max_rows=30, max_cols=10)
+
+    doc.add_heading("7. Force Diagrams Along Pile", level=2)
+    gov_label = None
+    if demand_df is not None and len(demand_df) > 0:
+        gov_lc = str(summary.get("governing_case", ""))
+        if "Load Case" in demand_df.columns and "Case Plot Label" in demand_df.columns:
+            m = demand_df[demand_df["Load Case"].astype(str) == gov_lc]
+            if not m.empty:
+                gov_label = str(m["Case Plot Label"].iloc[0])
+    force_img = _docx_profile_plot_image(
+        profile_df, gov_label,
+        ["Pu [kN]", "Mux [kN-m]", "Muy [kN-m]", "V resultant [kN]"],
+        "Force Diagrams Along Pile"
+    )
+    if force_img:
+        doc.add_picture(force_img, width=Cm(15.5))
+    else:
+        doc.add_paragraph("Force diagram image could not be generated. See QA workbook Force_Profile sheet.")
+
+    doc.add_heading("8. Displacement Diagrams Along Pile", level=2)
+    disp_img = _docx_profile_plot_image(
+        profile_df, gov_label,
+        ["Disp X [mm]", "Disp Y [mm]", "Disp resultant [mm]"],
+        "Displacement Diagrams Along Pile"
+    )
+    if disp_img:
+        doc.add_picture(disp_img, width=Cm(15.5))
+    else:
+        doc.add_paragraph("Displacement diagram image could not be generated. See QA workbook Force_Profile sheet.")
+
+    _docx_add_dataframe(doc, "9. Head Boundary Sensitivity", sensitivity_df, max_rows=25, max_cols=10)
+    _docx_add_dataframe(doc, "10. QA Checklist", qa_checklist, max_rows=30, max_cols=4)
+
+    doc.add_heading("11. Limitations / QA Notes", level=2)
+    notes = [
+        "This report is generated from the latest in-app calculation state. Re-run pile design after changing input data.",
+        "Pile structural design is preliminary and must be reviewed against the governing project code, detailing, anchorage, constructability, geotechnical axial capacity, and uplift requirements.",
+        "Soil spring stiffness is only as reliable as the input soil profile and selected kh method.",
+        "Case-by-case design basis is recommended. Non-concurrent envelope demand may combine maxima from different load cases and should be treated as a screening check.",
+        "For final work, keep this report with the exported spring workbook and the source pile-cap STM transfer file.",
+    ]
+    for note in notes:
+        doc.add_paragraph(note, style="List Bullet")
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # V.1 Verification / benchmark test cases
 # These tests are intentionally independent from Streamlit widgets. They provide
@@ -4344,6 +4648,114 @@ with tab4:
                     fd3.plotly_chart(_force_figure("Muy [kN-m]", "Bending Moment About Y", "Muy [kN-m]"), use_container_width=True)
                     fd4.plotly_chart(_force_figure("V resultant [kN]", "Shear Force Resultant", "V = sqrt(Vx^2 + Vy^2) [kN]"), use_container_width=True)
 
+                    st.subheader("Displacement Diagrams Along Pile")
+                    st.caption(
+                        "Displacements are plotted from the same solved pile-response profiles and load-case selection used above. "
+                        "Positive/negative X and Y signs follow the applied head shear directions; resultant displacement is shown as magnitude."
+                    )
+
+                    disp_plot_df = plot_profile_df.copy()
+                    if not disp_plot_df.empty:
+                        disp_plot_df["Disp resultant [mm]"] = np.sqrt(
+                            disp_plot_df["Disp X [mm]"].astype(float) ** 2
+                            + disp_plot_df["Disp Y [mm]"].astype(float) ** 2
+                        )
+                        disp_summary_rows = []
+                        for lc, grp in disp_plot_df.groupby("Case Plot Label", sort=False):
+                            grp = grp.sort_values("Depth [m]").copy()
+                            if grp.empty:
+                                continue
+                            ix = int(np.argmax(np.abs(grp["Disp X [mm]"].to_numpy(dtype=float))))
+                            iy = int(np.argmax(np.abs(grp["Disp Y [mm]"].to_numpy(dtype=float))))
+                            ir = int(np.argmax(grp["Disp resultant [mm]"].to_numpy(dtype=float)))
+                            disp_summary_rows.append({
+                                "Load Case": str(lc),
+                                "Head X disp. [mm]": float(grp["Disp X [mm]"].iloc[0]),
+                                "Head Y disp. [mm]": float(grp["Disp Y [mm]"].iloc[0]),
+                                "Max |X disp.| [mm]": float(abs(grp["Disp X [mm]"].iloc[ix])),
+                                "z @ X disp. [m]": float(grp["Depth [m]"].iloc[ix]),
+                                "Max |Y disp.| [mm]": float(abs(grp["Disp Y [mm]"].iloc[iy])),
+                                "z @ Y disp. [m]": float(grp["Depth [m]"].iloc[iy]),
+                                "Max resultant disp. [mm]": float(grp["Disp resultant [mm]"].iloc[ir]),
+                                "z @ resultant [m]": float(grp["Depth [m]"].iloc[ir]),
+                            })
+
+                        def _disp_figure(x_col, title, x_title, signed=True):
+                            fig = go.Figure()
+                            for i, (lc, grp) in enumerate(disp_plot_df.groupby("Case Plot Label", sort=False)):
+                                grp = grp.sort_values("Depth [m]").copy()
+                                fig.add_trace(go.Scatter(
+                                    x=grp[x_col],
+                                    y=grp["Depth [m]"],
+                                    mode="lines+markers",
+                                    name=str(lc),
+                                    line=dict(color=colors[i % len(colors)], width=2),
+                                    marker=dict(symbol=symbols[i % len(symbols)], size=7),
+                                    connectgaps=False,
+                                ))
+                            fig.update_layout(
+                                height=410,
+                                margin=dict(l=10, r=10, t=45, b=10),
+                                title=dict(text=title, font=dict(size=14)),
+                                yaxis=dict(autorange="reversed", title="Depth [m]"),
+                                xaxis=dict(
+                                    title=x_title,
+                                    zeroline=True,
+                                    zerolinecolor="rgba(60,60,60,0.45)",
+                                    rangemode=None if signed else "tozero",
+                                ),
+                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                            )
+                            return fig
+
+                        dsum_df = pd.DataFrame(disp_summary_rows)
+                        if not dsum_df.empty:
+                            st.dataframe(
+                                dsum_df.style.format({
+                                    "Head X disp. [mm]": "{:,.2f}",
+                                    "Head Y disp. [mm]": "{:,.2f}",
+                                    "Max |X disp.| [mm]": "{:,.2f}",
+                                    "z @ X disp. [m]": "{:.2f}",
+                                    "Max |Y disp.| [mm]": "{:,.2f}",
+                                    "z @ Y disp. [m]": "{:.2f}",
+                                    "Max resultant disp. [mm]": "{:,.2f}",
+                                    "z @ resultant [m]": "{:.2f}",
+                                }),
+                                use_container_width=True,
+                                hide_index=True,
+                                height=min(260, 70 + 36 * len(dsum_df)),
+                            )
+
+                        dd1, dd2 = st.columns(2)
+                        dd3, dd4 = st.columns(2)
+                        dd1.plotly_chart(_disp_figure("Disp X [mm]", "Lateral Displacement in X", "Ux [mm]"), use_container_width=True)
+                        dd2.plotly_chart(_disp_figure("Disp Y [mm]", "Lateral Displacement in Y", "Uy [mm]"), use_container_width=True)
+                        dd3.plotly_chart(_disp_figure("Disp resultant [mm]", "Displacement Resultant", "sqrt(Ux² + Uy²) [mm]", signed=False), use_container_width=True)
+
+                        fig_path = go.Figure()
+                        for i, (lc, grp) in enumerate(disp_plot_df.groupby("Case Plot Label", sort=False)):
+                            grp = grp.sort_values("Depth [m]").copy()
+                            fig_path.add_trace(go.Scatter(
+                                x=grp["Disp X [mm]"],
+                                y=grp["Disp Y [mm]"],
+                                mode="lines+markers",
+                                name=str(lc),
+                                line=dict(color=colors[i % len(colors)], width=2),
+                                marker=dict(symbol=symbols[i % len(symbols)], size=7),
+                                connectgaps=False,
+                            ))
+                        fig_path.update_layout(
+                            height=410,
+                            margin=dict(l=10, r=10, t=45, b=10),
+                            title=dict(text="Plan Displacement Path Ux-Uy", font=dict(size=14)),
+                            xaxis=dict(title="Ux [mm]", zeroline=True, zerolinecolor="rgba(60,60,60,0.45)"),
+                            yaxis=dict(title="Uy [mm]", zeroline=True, zerolinecolor="rgba(60,60,60,0.45)", scaleanchor="x", scaleratio=1),
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                        )
+                        dd4.plotly_chart(fig_path, use_container_width=True)
+                    else:
+                        st.info("No displacement profile is available for the selected force-diagram mode.")
+
                     st.subheader("ACI φPMM Design Strength Interaction")
 
                     ag_mm2 = Ap * 1e6
@@ -4756,8 +5168,19 @@ with tab7:
         st.dataframe(qa_checklist, use_container_width=True, hide_index=True, height=260)
 
         report_md = build_pile_design_markdown_report(report)
-        dl1, dl2 = st.columns(2)
-        dl1.download_button(
+        dl1, dl2, dl3 = st.columns(3)
+        try:
+            report_docx = build_pile_design_word_report(report)
+            dl1.download_button(
+                "Download Word Report (.docx)",
+                data=report_docx,
+                file_name=f"PileSoilSpring_Report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+            )
+        except RuntimeError as e:
+            dl1.error(str(e))
+        dl2.download_button(
             "Download QA Report (.md)",
             data=report_md.encode("utf-8"),
             file_name=f"PileSoilSpring_QA_Report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.md",
@@ -4766,7 +5189,7 @@ with tab7:
         )
         try:
             report_xlsx = build_pile_design_report_xlsx(report)
-            dl2.download_button(
+            dl3.download_button(
                 "Download QA Workbook (.xlsx)",
                 data=report_xlsx,
                 file_name=f"PileSoilSpring_QA_Workbook_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
@@ -4774,7 +5197,7 @@ with tab7:
                 use_container_width=True,
             )
         except RuntimeError as e:
-            dl2.error(str(e))
+            dl3.error(str(e))
 
         with st.expander("Preview Markdown report", expanded=False):
             st.markdown(report_md)
