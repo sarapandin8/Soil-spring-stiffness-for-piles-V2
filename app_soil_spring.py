@@ -65,7 +65,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-VERSION = 30  # V.2: add external validation package templates
+VERSION = 31  # R.8: polish Word report structure, styling, and executive summary
 
 #  CONSTANTS
 WIDGET_KEYS = [
@@ -2584,8 +2584,167 @@ def _docx_set_cell_shading(cell, fill):
         pass
 
 
+def _docx_set_cell_text(cell, text, bold=False, color=None, size=8.5):
+    """Set text in a DOCX table cell with compact report styling."""
+    try:
+        from docx.shared import Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+    except Exception:
+        cell.text = str(text)
+        return
+    cell.text = ""
+    p = cell.paragraphs[0]
+    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    run = p.add_run(_docx_safe_text(text))
+    run.bold = bool(bold)
+    run.font.size = Pt(size)
+    if color:
+        if isinstance(color, tuple):
+            run.font.color.rgb = RGBColor(*color)
+        else:
+            run.font.color.rgb = color
+
+
+def _docx_status_text(value):
+    """Normalize status strings for report badges."""
+    txt = str(value or "-").strip()
+    upper = txt.upper()
+    if upper in ("OK", "PASS", "PASSED", "SAFE"):
+        return "PASS"
+    if upper in ("NG", "FAIL", "FAILED", "UNSAFE"):
+        return "FAIL"
+    if upper in ("WARN", "WARNING", "REVIEW"):
+        return "REVIEW"
+    return txt
+
+
+def _docx_status_color(value):
+    """Return background color for a status value."""
+    txt = _docx_status_text(value).upper()
+    if txt == "PASS":
+        return "D9EAD3"  # green
+    if txt == "FAIL":
+        return "F4CCCC"  # red
+    if txt == "REVIEW":
+        return "FFF2CC"  # amber
+    return "E7E6E6"
+
+
+def _docx_add_note_box(doc, title, body, fill="EAF2F8"):
+    """Add a one-cell note box for assumptions, limitations, or warnings."""
+    table = doc.add_table(rows=1, cols=1)
+    table.style = "Table Grid"
+    cell = table.rows[0].cells[0]
+    _docx_set_cell_shading(cell, fill)
+    cell.text = ""
+    p = cell.paragraphs[0]
+    r = p.add_run(str(title))
+    r.bold = True
+    try:
+        from docx.shared import Pt, RGBColor
+        r.font.size = Pt(9.5)
+        r.font.color.rgb = RGBColor(0x1A, 0x4F, 0x8A)
+    except Exception:
+        pass
+    p2 = cell.add_paragraph(str(body))
+    try:
+        from docx.shared import Pt
+        for rr in p2.runs:
+            rr.font.size = Pt(8.5)
+    except Exception:
+        pass
+
+
+def _docx_add_caption(doc, caption):
+    """Add a compact figure/table caption."""
+    p = doc.add_paragraph()
+    p.style = doc.styles["Normal"]
+    try:
+        from docx.shared import Pt, RGBColor
+        r = p.add_run(str(caption))
+        r.italic = True
+        r.font.size = Pt(8)
+        r.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+    except Exception:
+        p.add_run(str(caption))
+
+
+def _docx_add_status_dashboard(doc, title, rows):
+    """Add a high-level dashboard table with status coloring."""
+    if title:
+        doc.add_heading(title, level=2)
+    table = doc.add_table(rows=1, cols=4)
+    table.style = "Table Grid"
+    headers = ["Check / Item", "Demand / Value", "Limit / Reference", "Status"]
+    for j, h in enumerate(headers):
+        cell = table.rows[0].cells[j]
+        _docx_set_cell_shading(cell, "1A4F8A")
+        _docx_set_cell_text(cell, h, bold=True, color=(255, 255, 255), size=8.5)
+    for item, value, limit, status in rows:
+        cells = table.add_row().cells
+        _docx_set_cell_text(cells[0], item, bold=True, size=8.5)
+        _docx_set_cell_text(cells[1], value, size=8.5)
+        _docx_set_cell_text(cells[2], limit, size=8.5)
+        _docx_set_cell_shading(cells[3], _docx_status_color(status))
+        _docx_set_cell_text(cells[3], _docx_status_text(status), bold=True, size=8.5)
+
+
+def _docx_add_report_intro(doc, project, meta, summary, inputs):
+    """Add a polished cover / report-control section."""
+    try:
+        from docx.shared import Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+    except Exception:
+        return
+    title = doc.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = title.add_run("Pile Lateral Soil Spring Design Report")
+    run.bold = True
+    run.font.size = Pt(20)
+    run.font.color.rgb = RGBColor(0x1A, 0x4F, 0x8A)
+
+    subtitle = doc.add_paragraph()
+    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    sub = subtitle.add_run("Winkler soil-spring response, pile section capacity check, and QA traceability")
+    sub.italic = True
+    sub.font.size = Pt(10)
+    sub.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+
+    doc.add_paragraph()
+    rows = [
+        ("Project No.", project.get("project_no", "-")),
+        ("Project Title", project.get("project_title", "-")),
+        ("Structure / Location", project.get("structure_name", "-")),
+        ("Revision", project.get("revision", "-")),
+        ("Designer", project.get("designer", "-")),
+        ("Checker", project.get("checker", "-")),
+        ("Generated", meta.get("timestamp", "-")),
+        ("Load-case source", meta.get("load_case_source", "Manual / in-app table")),
+    ]
+    _docx_add_kv_table(doc, None, rows)
+
+    overall = summary.get("overall_status", "-")
+    pmm_status = "PASS" if float(summary.get("max_pmm_util", 999.0)) <= 1.0 else "FAIL"
+    tie_status = "PASS" if bool(summary.get("provided_tie_spacing_ok", False)) else "FAIL"
+    _docx_add_status_dashboard(doc, "Executive Design Status", [
+        ("Overall pile section check", summary.get("max_util", "-"), "Utilization <= 1.00", overall),
+        ("PMM interaction check", summary.get("max_pmm_util", "-"), "Utilization <= 1.00", pmm_status),
+        ("Tension check", summary.get("max_tension_util", "-"), "Utilization <= 1.00", "PASS" if float(summary.get("max_tension_util", 0.0)) <= 1.0 else "FAIL"),
+        ("Transverse tie spacing", inputs.get("tie_spacing_mm", "-"), "<= recommended spacing", tie_status),
+        ("Governing load case", summary.get("governing_case", "-"), "Case-by-case design preferred", "REVIEW"),
+        ("Pile-head condition", inputs.get("head_condition", "-"), "Review restraint assumption", "REVIEW"),
+    ])
+    _docx_add_note_box(
+        doc,
+        "Report interpretation",
+        "This document is intended as an engineering review report for pile response and structural section checks. "
+        "Geotechnical axial capacity, pile load-test interpretation, final detailing, constructability, and project-specific code review remain outside the automatic check and shall be verified separately.",
+        fill="EAF2F8",
+    )
+    doc.add_page_break()
+
 def _docx_add_kv_table(doc, title, rows):
-    """Add a two-column key/value table to a Word document."""
+    """Add a polished two-column key/value table to a Word document."""
     if title:
         doc.add_heading(title, level=2)
     clean_rows = [(str(k), _docx_safe_text(v)) for k, v in rows if str(k).strip()]
@@ -2594,21 +2753,19 @@ def _docx_add_kv_table(doc, title, rows):
         return
     table = doc.add_table(rows=1, cols=2)
     table.style = "Table Grid"
-    table.rows[0].cells[0].text = "Item"
-    table.rows[0].cells[1].text = "Value"
-    for cell in table.rows[0].cells:
-        _docx_set_cell_shading(cell, "BDD7EE")
-        for p in cell.paragraphs:
-            for r in p.runs:
-                r.bold = True
+    _docx_set_cell_shading(table.rows[0].cells[0], "1A4F8A")
+    _docx_set_cell_shading(table.rows[0].cells[1], "1A4F8A")
+    _docx_set_cell_text(table.rows[0].cells[0], "Item", bold=True, color=(255, 255, 255), size=8.5)
+    _docx_set_cell_text(table.rows[0].cells[1], "Value", bold=True, color=(255, 255, 255), size=8.5)
     for k, v in clean_rows:
         cells = table.add_row().cells
-        cells[0].text = k
-        cells[1].text = v
+        _docx_set_cell_shading(cells[0], "EAF2F8")
+        _docx_set_cell_text(cells[0], k, bold=True, size=8.3)
+        _docx_set_cell_text(cells[1], v, size=8.3)
 
 
 def _docx_add_dataframe(doc, title, df, max_rows=25, max_cols=8):
-    """Add a compact DataFrame table to DOCX, truncating for report readability."""
+    """Add a compact, report-ready DataFrame table to DOCX."""
     if title:
         doc.add_heading(title, level=2)
     if df is None or len(df) == 0:
@@ -2619,7 +2776,7 @@ def _docx_add_dataframe(doc, title, df, max_rows=25, max_cols=8):
         view = view.drop(columns=["Case Plot Label"], errors="ignore")
     if len(view.columns) > max_cols:
         view = view.iloc[:, :max_cols].copy()
-        doc.add_paragraph(f"Note: table limited to first {max_cols} columns for report readability.")
+        _docx_add_note_box(doc, "Table truncated", f"Only the first {max_cols} columns are shown in the Word report. See the QA workbook for complete data.", fill="FFF2CC")
     truncated = len(view) > max_rows
     if truncated:
         view = view.head(max_rows).copy()
@@ -2628,17 +2785,17 @@ def _docx_add_dataframe(doc, title, df, max_rows=25, max_cols=8):
     table.style = "Table Grid"
     hdr = table.rows[0].cells
     for j, col in enumerate(view.columns):
-        hdr[j].text = str(col)
-        _docx_set_cell_shading(hdr[j], "BDD7EE")
-        for p in hdr[j].paragraphs:
-            for r in p.runs:
-                r.bold = True
-    for _, row in view.iterrows():
+        _docx_set_cell_shading(hdr[j], "1A4F8A")
+        _docx_set_cell_text(hdr[j], str(col), bold=True, color=(255, 255, 255), size=7.6)
+    for row_i, (_, row) in enumerate(view.iterrows(), start=1):
         cells = table.add_row().cells
+        if row_i % 2 == 0:
+            for cell in cells:
+                _docx_set_cell_shading(cell, "F7FBFF")
         for j, val in enumerate(row.tolist()):
-            cells[j].text = _docx_safe_text(val)
+            _docx_set_cell_text(cells[j], val, size=7.3)
     if truncated:
-        doc.add_paragraph(f"Note: table truncated to first {max_rows} rows. See QA workbook for complete data.")
+        _docx_add_note_box(doc, "Rows omitted", f"Table truncated to the first {max_rows} rows. See the QA workbook for complete data.", fill="FFF2CC")
 
 
 def _docx_profile_plot_image(profile_df, case_label, columns, title):
@@ -2948,20 +3105,20 @@ def build_pile_design_word_report(report):
         style.font.bold = True
         style.font.color.rgb = color
 
-    # Footer
+    # Header / footer
+    header = section.header.paragraphs[0]
+    header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    hrun = header.add_run("Pile Soil Spring Design Report")
+    hrun.font.size = Pt(8)
+    hrun.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+
     footer = section.footer.paragraphs[0]
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = footer.add_run("Pile Soil Spring Design Report | Preliminary Engineering Review")
+    run = footer.add_run("Preliminary Engineering Review | Generated by Soil Spring App | Verify against project design basis")
     run.font.size = Pt(8)
     run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
 
-    title = doc.add_paragraph()
-    title.style = doc.styles["Title"]
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title.add_run("Pile Lateral Soil Spring Design Report")
-    subtitle = doc.add_paragraph()
-    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    subtitle.add_run("Winkler Soil Spring Response | Pile Section Check | QA Traceability").italic = True
+    _docx_add_report_intro(doc, project, meta, summary, inputs)
 
     _docx_add_kv_table(doc, "1. Project Information", [
         ("Project No.", project.get("project_no", "-")),
@@ -2986,7 +3143,12 @@ def build_pile_design_word_report(report):
         ("Water table [m]", inputs.get("water_table", 0.0)),
         ("Scour depth [m]", inputs.get("scour_depth", 0.0)),
     ])
-    doc.add_paragraph("Fixed Head solves the head reaction moment internally. Do not double-count external pile-head moments from another model.")
+    _docx_add_note_box(
+        doc,
+        "Boundary-condition note",
+        "Fixed Head solves the pile-head reaction moment internally. If forces are imported from a pile-cap STM workflow, do not add an external pile-head moment unless it is intentionally part of the independent analysis model.",
+        fill="EAF2F8",
+    )
 
     _docx_add_kv_table(doc, "3. Pile Geometry and Reinforcement", [
         ("Pile type", inputs.get("pile_type", "-")),
@@ -3009,6 +3171,7 @@ def build_pile_design_word_report(report):
         width_cm=10.5,
         fallback="Pile section reinforcement figure could not be generated. Review in-app section preview."
     )
+    _docx_add_caption(doc, "Figure 3-1. Pile section and reinforcement arrangement used in the section-capacity check.")
 
     as_req_total = float(shear_summary.get("as_req_total_mm2", 0.0)) if isinstance(shear_summary, dict) else 0.0
     as_prov = float(summary.get("as_provided_mm2", 0.0))
@@ -3070,18 +3233,21 @@ def build_pile_design_word_report(report):
         width_cm=15.0,
         fallback="Uniaxial PMM figure could not be generated. Review in-app PMM interaction diagrams."
     )
+    _docx_add_caption(doc, "Figure 9-1. Uniaxial design-strength interaction curves with load-case demands.")
     _docx_add_picture_or_note(
         doc,
         _docx_pmm_slice_image(pmm_df, demand_df, summary),
         width_cm=13.5,
         fallback="Governing PMM slice figure could not be generated. Review in-app PMM slice diagram."
     )
+    _docx_add_caption(doc, "Figure 9-2. Governing Mux-Muy capacity slice at the governing axial load level.")
     _docx_add_picture_or_note(
         doc,
         _docx_pmm_3d_image(pmm_df, demand_df, summary),
         width_cm=15.0,
         fallback="3D PMM surface figure could not be generated. Review in-app 3D PMM figure."
     )
+    _docx_add_caption(doc, "Figure 9-3. Three-dimensional factored PMM design-strength surface and demand points.")
 
     doc.add_heading("10. Force Diagrams Along Pile", level=2)
     gov_label = None
@@ -3098,6 +3264,7 @@ def build_pile_design_word_report(report):
     )
     if force_img:
         doc.add_picture(force_img, width=Cm(15.5))
+        _docx_add_caption(doc, "Figure 10-1. Force diagrams along pile for the governing load case.")
     else:
         doc.add_paragraph("Force diagram image could not be generated. See QA workbook Force_Profile sheet.")
 
@@ -3109,6 +3276,7 @@ def build_pile_design_word_report(report):
     )
     if disp_img:
         doc.add_picture(disp_img, width=Cm(15.5))
+        _docx_add_caption(doc, "Figure 11-1. Lateral displacement diagrams along pile for the governing load case.")
     else:
         doc.add_paragraph("Displacement diagram image could not be generated. See QA workbook Force_Profile sheet.")
 
