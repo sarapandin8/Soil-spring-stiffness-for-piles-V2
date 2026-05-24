@@ -2199,6 +2199,211 @@ def build_pile_design_qa_checklist(report):
 
     return pd.DataFrame(rows)
 
+
+def build_final_report_review_checklist(report):
+    """Return final report review / punch-list checklist before issuing a report.
+
+    This is a reporting QA layer only. It does not change calculation results.
+    The checklist focuses on whether the exported report is complete, traceable,
+    and safe to issue for engineering review.
+    """
+    if not report:
+        return pd.DataFrame([{
+            "Group": "Run state", "Status": "NG", "Review item": "Latest calculation",
+            "Finding": "No latest pile design calculation is stored.",
+            "Action before issue": "Run / Update Pile Design before exporting the report."
+        }])
+
+    rows = []
+    meta = report.get("meta", {}) or {}
+    project = report.get("project", {}) or {}
+    inputs = report.get("inputs", {}) or {}
+    summary = report.get("summary", {}) or {}
+    load_cases = report.get("load_cases", pd.DataFrame())
+    demand_df = report.get("demand_df", pd.DataFrame())
+    profile_df = report.get("profile_df", pd.DataFrame())
+    sensitivity_df = report.get("sensitivity_df", pd.DataFrame())
+    bar_df = report.get("bar_df", pd.DataFrame())
+    pmm_df = report.get("pmm_df", pd.DataFrame())
+    mx_curve = report.get("mx_curve", pd.DataFrame())
+    my_curve = report.get("my_curve", pd.DataFrame())
+    qa_checklist = report.get("qa_checklist", build_pile_design_qa_checklist(report))
+
+    def add(group, status, item, finding, action=""):
+        rows.append({
+            "Group": group,
+            "Status": status,
+            "Review item": item,
+            "Finding": finding,
+            "Action before issue": action,
+        })
+
+    # A. Visual / report completeness
+    required_project = ["project_title", "structure_name", "designer", "checker", "revision"]
+    missing_project = [k for k in required_project if not str(project.get(k, "")).strip()]
+    if missing_project:
+        add("A. Report completeness", "WARN", "Project metadata",
+            "Missing fields: " + ", ".join(missing_project),
+            "Fill project metadata in the sidebar before final issue.")
+    else:
+        add("A. Report completeness", "OK", "Project metadata",
+            "Project title, structure/location, designer, checker, and revision are recorded.")
+
+    if load_cases is not None and len(load_cases) > 0:
+        add("A. Report completeness", "OK", "Load case table",
+            f"{len(load_cases)} active load case(s) will be included in the report.")
+    else:
+        add("A. Report completeness", "NG", "Load case table",
+            "No active load cases are available.", "Import or enter load cases and rerun design.")
+
+    if demand_df is not None and len(demand_df) > 0:
+        add("A. Report completeness", "OK", "Load case result table",
+            f"{len(demand_df)} checked demand row(s) are available.")
+    else:
+        add("A. Report completeness", "NG", "Load case result table",
+            "No design-demand table is available.", "Rerun pile design and confirm results appear in Pile Design.")
+
+    if profile_df is not None and len(profile_df) > 0:
+        profile_cols = set(profile_df.columns)
+        force_cols = {"Pu [kN]", "Mux [kN-m]", "Muy [kN-m]", "V resultant [kN]"}
+        disp_cols = {"Disp X [mm]", "Disp Y [mm]", "Disp resultant [mm]"}
+        if force_cols.issubset(profile_cols) and disp_cols.issubset(profile_cols):
+            add("A. Report completeness", "OK", "Force/displacement diagrams",
+                "Profile data includes force and displacement diagram columns.")
+        else:
+            add("A. Report completeness", "WARN", "Force/displacement diagrams",
+                "Profile data exists but some diagram columns are missing.",
+                "Review the exported Word report figures and QA workbook Force_Profile sheet.")
+    else:
+        add("A. Report completeness", "NG", "Force/displacement diagrams",
+            "No pile-depth profile data is available for report figures.", "Rerun pile design.")
+
+    if bar_df is not None and len(bar_df) > 0:
+        add("A. Report completeness", "OK", "Section reinforcement figure",
+            f"{len(bar_df)} longitudinal bar point(s) are available for section/rebar figure.")
+    else:
+        add("A. Report completeness", "NG", "Section reinforcement figure",
+            "Reinforcement layout data is missing.", "Check reinforcement inputs and rerun design.")
+
+    if pmm_df is not None and len(pmm_df) > 0 and mx_curve is not None and len(mx_curve) > 0 and my_curve is not None and len(my_curve) > 0:
+        add("A. Report completeness", "OK", "PMM figures",
+            "PMM point cloud and uniaxial curves are available for report figures.")
+    else:
+        add("A. Report completeness", "WARN", "PMM figures",
+            "Some PMM figure data is missing.",
+            "Open exported Word report and confirm PMM figures are embedded; otherwise rerun PMM design.")
+
+    # B. Numeric / traceability consistency
+    if str(meta.get("load_case_source", "")).strip():
+        add("B. Numeric traceability", "OK", "Load-case source",
+            str(meta.get("load_case_source")))
+    else:
+        add("B. Numeric traceability", "WARN", "Load-case source",
+            "Load-case source was not recorded.", "Record whether loads came from STM transfer, Excel, or manual input.")
+
+    gov = str(summary.get("governing_case", "") or "").strip()
+    if gov and demand_df is not None and len(demand_df) > 0 and "Load Case" in demand_df.columns:
+        if gov in demand_df["Load Case"].astype(str).tolist():
+            add("B. Numeric traceability", "OK", "Governing case consistency",
+                f"Governing case '{gov}' exists in the result table.")
+        else:
+            add("B. Numeric traceability", "WARN", "Governing case consistency",
+                f"Governing case '{gov}' was not found in the result table.",
+                "Rerun design and check latest calculation state.")
+    else:
+        add("B. Numeric traceability", "WARN", "Governing case consistency",
+            "Governing case or result table is not available.", "Rerun design.")
+
+    max_util = float(summary.get("max_util", 0.0) or 0.0)
+    if max_util <= 1.0:
+        add("B. Numeric traceability", "OK", "Overall utilization",
+            f"Overall utilization = {max_util:.3f}.")
+    else:
+        add("B. Numeric traceability", "NG", "Overall utilization",
+            f"Overall utilization = {max_util:.3f} > 1.0.",
+            "Revise section/reinforcement or design assumptions before issuing as passing design.")
+
+    pmm_util = float(summary.get("max_pmm_util", 0.0) or 0.0)
+    tension_util = float(summary.get("max_tension_util", 0.0) or 0.0)
+    if pmm_util <= 1.0 and tension_util <= 1.0:
+        add("B. Numeric traceability", "OK", "PMM / tension status",
+            f"PMM U = {pmm_util:.3f}, tension U = {tension_util:.3f}.")
+    else:
+        add("B. Numeric traceability", "NG", "PMM / tension status",
+            f"PMM U = {pmm_util:.3f}, tension U = {tension_util:.3f}.",
+            "Do not issue as passing design without redesign or justification.")
+
+    if bool(summary.get("provided_tie_spacing_ok", True)):
+        add("B. Numeric traceability", "OK", "Tie spacing status",
+            "Provided tie spacing satisfies the preliminary recommended spacing check.")
+    else:
+        add("B. Numeric traceability", "WARN", "Tie spacing status",
+            "Provided tie spacing exceeds preliminary recommendation.",
+            "Review shear/confinement detailing before final issue.")
+
+    # C. Engineering acceptance / assumption check
+    basis = str(inputs.get("design_demand_basis", summary.get("design_demand_basis", "")))
+    if basis.startswith("Case-by-case"):
+        add("C. Engineering acceptance", "OK", "Design demand basis",
+            basis)
+    else:
+        add("C. Engineering acceptance", "WARN", "Design demand basis",
+            basis or "Not recorded.",
+            "Use case-by-case governing for final design; envelope mode is screening/legacy.")
+
+    head = str(inputs.get("head_condition", ""))
+    if head.startswith("Fixed"):
+        add("C. Engineering acceptance", "OK", "Pile-head condition",
+            "Fixed head selected; head reaction moment is solved internally.")
+    elif head.startswith("Rotational"):
+        add("C. Engineering acceptance", "WARN", "Pile-head condition",
+            f"Rotational spring selected, Kθ = {float(inputs.get('ktheta_head', 0.0)):,.0f} kN-m/rad.",
+            "Justify Kθ by sensitivity, calibration, or project assumption note.")
+    else:
+        add("C. Engineering acceptance", "WARN", "Pile-head condition",
+            "Free-head / shear-only selected.",
+            "Confirm this matches pile-cap restraint or include fixed-head comparison.")
+
+    if sensitivity_df is not None and len(sensitivity_df) > 0:
+        add("C. Engineering acceptance", "OK", "Head-boundary sensitivity",
+            f"{len(sensitivity_df)} sensitivity result row(s) included.")
+    else:
+        add("C. Engineering acceptance", "WARN", "Head-boundary sensitivity",
+            "Sensitivity results are not included.",
+            "Run head-condition sensitivity before final review.")
+
+    method = str(inputs.get("kh_method", ""))
+    if method:
+        finding = f"kh method = {method}."
+        status = "WARN" if method == "Broms 1964" else "OK"
+        action = "Cross-check elastic response with another kh method if Broms is used." if status == "WARN" else ""
+        add("C. Engineering acceptance", status, "Soil spring method", finding, action)
+    else:
+        add("C. Engineering acceptance", "WARN", "Soil spring method", "kh method is not recorded.", "Rerun and check report state.")
+
+    # D. Issue-control items
+    qa_statuses = qa_checklist["Status"].astype(str).str.upper().tolist() if qa_checklist is not None and len(qa_checklist) > 0 and "Status" in qa_checklist.columns else []
+    if "NG" in qa_statuses:
+        add("D. Issue control", "NG", "QA checklist status",
+            "QA checklist contains NG item(s).", "Resolve NG items before issuing report.")
+    elif "WARN" in qa_statuses:
+        add("D. Issue control", "WARN", "QA checklist status",
+            "QA checklist contains warning item(s).", "Review warning items and document acceptance if kept.")
+    else:
+        add("D. Issue control", "OK", "QA checklist status",
+            "No NG/WARN item found in QA checklist.")
+
+    notes = str(project.get("project_notes", "") or "").strip()
+    if notes:
+        add("D. Issue control", "OK", "Reviewer notes",
+            "Calculation notes are recorded in project metadata.")
+    else:
+        add("D. Issue control", "WARN", "Reviewer notes",
+            "Calculation notes are blank.",
+            "Add design assumptions, source files, and reviewer comments before formal issue.")
+
+    return pd.DataFrame(rows)
+
 def build_pile_design_markdown_report(report):
     """Build a clean markdown QA/design summary from the latest pile-design run."""
     if not report:
@@ -2211,6 +2416,7 @@ def build_pile_design_markdown_report(report):
     sensitivity_df = report.get("sensitivity_df", pd.DataFrame())
     project = report.get("project", {})
     qa_checklist = report.get("qa_checklist", build_pile_design_qa_checklist(report))
+    final_review = report.get("final_review_checklist", build_final_report_review_checklist(report))
 
     lines = []
     lines.append("# Pile Lateral Soil Spring Design Report")
@@ -2278,7 +2484,10 @@ def build_pile_design_markdown_report(report):
     lines.append("## 8. QA Checklist")
     lines.append(_df_to_markdown_table(qa_checklist, max_rows=80))
     lines.append("")
-    lines.append("## 9. Limitations / QA Notes")
+    lines.append("## 9. Final Report Review / Punch List")
+    lines.append(_df_to_markdown_table(final_review, max_rows=100))
+    lines.append("")
+    lines.append("## 10. Limitations / QA Notes")
     lines.append("- This report is generated from the latest in-app calculation state. Re-run pile design after changing input data.")
     lines.append("- Pile structural design is preliminary and must be reviewed against the governing project code, detailing, anchorage, constructability, geotechnical axial capacity, and uplift requirements.")
     lines.append("- Soil spring stiffness is only as reliable as the input soil profile and selected kh method.")
@@ -2304,6 +2513,7 @@ def build_pile_design_report_xlsx(report):
         summary = report.get("summary", {}) if report else {}
         project = report.get("project", {}) if report else {}
         qa_checklist = report.get("qa_checklist", build_pile_design_qa_checklist(report)) if report else pd.DataFrame()
+        final_review = report.get("final_review_checklist", build_final_report_review_checklist(report)) if report else pd.DataFrame()
         summary_rows = []
         for k, v in project.items():
             summary_rows.append({"Group": "Project", "Item": k, "Value": v})
@@ -2322,6 +2532,7 @@ def build_pile_design_report_xlsx(report):
         ws.set_column(0, 0, 16); ws.set_column(1, 1, 34); ws.set_column(2, 2, 42)
         sheet_map = {
             "QA_Checklist": qa_checklist,
+            "Final_Report_Review": final_review,
             "Load_Cases": report.get("load_cases", pd.DataFrame()) if report else pd.DataFrame(),
             "Design_Demands": report.get("demand_df", pd.DataFrame()) if report else pd.DataFrame(),
             "Force_Profile": report.get("profile_df", pd.DataFrame()) if report else pd.DataFrame(),
@@ -2477,6 +2688,217 @@ def _docx_profile_plot_image(profile_df, case_label, columns, title):
     return buf
 
 
+
+def _docx_section_rebar_image(inputs, bar_df):
+    """Create a pile section/reinforcement sketch for the DOCX report."""
+    if bar_df is None or len(bar_df) == 0:
+        return None
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Circle, Rectangle
+    except ModuleNotFoundError:
+        return None
+    pile_type = str(inputs.get("pile_type", "Round"))
+    D = float(inputs.get("D", 1.0))
+    B = float(inputs.get("B", D))
+    H = float(inputs.get("H", D))
+    cover_mm = float(inputs.get("cover_mm", 75.0))
+    main_bar = str(inputs.get("main_bar", "Main bar"))
+    tie_bar = str(inputs.get("tie_bar", "Tie"))
+    x = pd.to_numeric(bar_df.get("x_mm", pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
+    y = pd.to_numeric(bar_df.get("y_mm", pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
+    if len(x) == 0 or len(y) == 0:
+        return None
+    fig, ax = plt.subplots(figsize=(4.8, 4.8), dpi=170)
+    if pile_type == "Round":
+        radius = D * 1000.0 / 2.0
+        ax.add_patch(Circle((0.0, 0.0), radius, fill=False, linewidth=2.0))
+        ax.add_patch(Circle((0.0, 0.0), max(radius - cover_mm, 0.0), fill=False, linestyle="--", linewidth=1.0))
+        lim = radius * 1.35
+        title = f"Round pile D = {D:.2f} m"
+    else:
+        b_mm = B * 1000.0
+        h_mm = H * 1000.0
+        ax.add_patch(Rectangle((-b_mm/2.0, -h_mm/2.0), b_mm, h_mm, fill=False, linewidth=2.0))
+        ax.add_patch(Rectangle((-b_mm/2.0 + cover_mm, -h_mm/2.0 + cover_mm),
+                               max(b_mm - 2*cover_mm, 0.0), max(h_mm - 2*cover_mm, 0.0),
+                               fill=False, linestyle="--", linewidth=1.0))
+        lim = max(b_mm, h_mm) * 0.70
+        title = f"Rectangular pile B x H = {B:.2f} x {H:.2f} m"
+    ax.scatter(x, y, s=42, marker="o", zorder=3)
+    ax.axhline(0.0, linewidth=0.8, alpha=0.45)
+    ax.axvline(0.0, linewidth=0.8, alpha=0.45)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlim(-lim, lim)
+    ax.set_ylim(-lim, lim)
+    ax.grid(True, alpha=0.20)
+    ax.set_title(title)
+    ax.set_xlabel("x [mm]")
+    ax.set_ylabel("y [mm]")
+    ax.text(0.02, 0.98,
+            f"{len(bar_df)}-{main_bar}\n{tie_bar} ties\ncover = {cover_mm:.0f} mm",
+            transform=ax.transAxes, va="top", ha="left",
+            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="0.7", alpha=0.9),
+            fontsize=8)
+    fig.tight_layout()
+    buf = BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def _docx_pmm_uniaxial_image(mx_curve, my_curve, demand_df):
+    """Create uniaxial PMM interaction curves for the DOCX report."""
+    if mx_curve is None or my_curve is None or len(mx_curve) == 0 or len(my_curve) == 0:
+        return None
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ModuleNotFoundError:
+        return None
+    try:
+        mx_env = interaction_curve_envelope(mx_curve)
+        my_env = interaction_curve_envelope(my_curve)
+    except Exception:
+        mx_env = mx_curve.copy()
+        my_env = my_curve.copy()
+    fig, ax = plt.subplots(figsize=(6.8, 4.4), dpi=160)
+    if "phiM [kN-m]" in mx_env.columns and "phiPn [kN]" in mx_env.columns:
+        ax.plot(mx_env["phiM [kN-m]"], mx_env["phiPn [kN]"], linewidth=2.0, label="about X")
+    if "phiM [kN-m]" in my_env.columns and "phiPn [kN]" in my_env.columns:
+        ax.plot(my_env["phiM [kN-m]"], my_env["phiPn [kN]"], linewidth=2.0, linestyle="--", label="about Y")
+    if demand_df is not None and len(demand_df) > 0:
+        if "Max |Mux| [kN-m]" in demand_df.columns and "Max Pu [kN]" in demand_df.columns:
+            ax.scatter(demand_df["Max |Mux| [kN-m]"], demand_df["Max Pu [kN]"], marker="x", s=38, label="Pu-Mux demand")
+        if "Max |Muy| [kN-m]" in demand_df.columns and "Max Pu [kN]" in demand_df.columns:
+            ax.scatter(demand_df["Max |Muy| [kN-m]"], demand_df["Max Pu [kN]"], marker="+", s=42, label="Pu-Muy demand")
+    ax.axhline(0.0, linewidth=0.8, alpha=0.45)
+    ax.axvline(0.0, linewidth=0.8, alpha=0.45)
+    ax.grid(True, alpha=0.25)
+    ax.set_title("Uniaxial φPMM Design Strength Curves")
+    ax.set_xlabel("φMn [kN-m]")
+    ax.set_ylabel("φPn / Pu [kN]")
+    ax.legend(fontsize=7)
+    fig.tight_layout()
+    buf = BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def _docx_pmm_slice_image(pmm_df, demand_df, summary):
+    """Create the governing constant-Pu Mx-My PMM slice for the DOCX report."""
+    if pmm_df is None or len(pmm_df) == 0 or demand_df is None or len(demand_df) == 0:
+        return None
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ModuleNotFoundError:
+        return None
+    try:
+        gov_case = str(summary.get("governing_case", ""))
+        row_df = demand_df[demand_df["Load Case"].astype(str) == gov_case] if "Load Case" in demand_df.columns else pd.DataFrame()
+        row = row_df.iloc[0] if not row_df.empty else demand_df.sort_values("Overall Util.", ascending=False).iloc[0]
+        pu = float(row.get("Max Pu [kN]", row.get("Pu [kN]", 0.0)))
+        mx = float(row.get("PMM Mux [kN-m]", row.get("Max |Mux| [kN-m]", 0.0)))
+        my = float(row.get("PMM Muy [kN-m]", row.get("Max |Muy| [kN-m]", 0.0)))
+        sl = pmm_slice_at_p(pmm_df, pu)
+        if sl is None or len(sl) == 0:
+            return None
+    except Exception:
+        return None
+    fig, ax = plt.subplots(figsize=(5.6, 5.2), dpi=160)
+    ax.plot(sl["phiMnx [kN-m]"], sl["phiMny [kN-m]"], linewidth=2.0, label="φPMM design slice")
+    ax.fill(sl["phiMnx [kN-m]"], sl["phiMny [kN-m]"], alpha=0.10)
+    ax.plot([0.0, mx], [0.0, my], linewidth=1.6, label="demand vector")
+    ax.scatter([mx], [my], marker="x", s=70, label=str(row.get("Load Case", "demand")))
+    ax.axhline(0.0, linewidth=0.8, alpha=0.45)
+    ax.axvline(0.0, linewidth=0.8, alpha=0.45)
+    ax.grid(True, alpha=0.25)
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.set_title(f"Governing φPMM Slice at Pu = {pu:,.0f} kN")
+    ax.set_xlabel("φMnx [kN-m]")
+    ax.set_ylabel("φMny [kN-m]")
+    ax.legend(fontsize=7)
+    fig.tight_layout()
+    buf = BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def _docx_pmm_3d_image(pmm_df, demand_df, summary):
+    """Create a static 3D PMM surface figure for the DOCX report."""
+    if pmm_df is None or len(pmm_df) == 0:
+        return None
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+    except ModuleNotFoundError:
+        return None
+    try:
+        grid = pmm_polar_surface_grid(pmm_df, n_levels=18, n_angles=49)
+        if grid is None:
+            return None
+        sx, sy, sz = grid
+    except Exception:
+        return None
+    fig = plt.figure(figsize=(6.8, 5.2), dpi=150)
+    ax = fig.add_subplot(111, projection="3d")
+    try:
+        ax.plot_surface(sx, sy, sz, alpha=0.33, linewidth=0.2, antialiased=True)
+    except Exception:
+        return None
+    if demand_df is not None and len(demand_df) > 0:
+        xcol = "PMM Mux [kN-m]" if "PMM Mux [kN-m]" in demand_df.columns else "Max |Mux| [kN-m]"
+        ycol = "PMM Muy [kN-m]" if "PMM Muy [kN-m]" in demand_df.columns else "Max |Muy| [kN-m]"
+        zcol = "Max Pu [kN]" if "Max Pu [kN]" in demand_df.columns else None
+        if xcol in demand_df.columns and ycol in demand_df.columns and zcol in demand_df.columns:
+            ax.scatter(demand_df[xcol], demand_df[ycol], demand_df[zcol], s=24, marker="o", label="load points")
+            try:
+                gov_case = str(summary.get("governing_case", ""))
+                row_df = demand_df[demand_df["Load Case"].astype(str) == gov_case]
+                if not row_df.empty:
+                    r = row_df.iloc[0]
+                    ax.scatter([r[xcol]], [r[ycol]], [r[zcol]], s=58, marker="x", label="governing")
+            except Exception:
+                pass
+    ax.set_title("3D φPMM Design Strength Surface")
+    ax.set_xlabel("φMnx [kN-m]")
+    ax.set_ylabel("φMny [kN-m]")
+    ax.set_zlabel("φPn / Pu [kN]")
+    ax.view_init(elev=22, azim=38)
+    ax.legend(fontsize=7, loc="upper left")
+    fig.tight_layout()
+    buf = BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def _docx_add_picture_or_note(doc, image_buf, width_cm=15.0, fallback="Figure could not be generated from the latest calculation state."):
+    """Insert a DOCX picture if available, otherwise insert a clear note."""
+    if image_buf:
+        try:
+            from docx.shared import Cm
+            doc.add_picture(image_buf, width=Cm(width_cm))
+            return True
+        except Exception:
+            pass
+    doc.add_paragraph(fallback)
+    return False
+
+
 def build_pile_design_word_report(report):
     """Build a professional Word DOCX report for the latest pile-design run."""
     try:
@@ -2499,6 +2921,11 @@ def build_pile_design_word_report(report):
     profile_df = report.get("profile_df", pd.DataFrame())
     sensitivity_df = report.get("sensitivity_df", pd.DataFrame())
     qa_checklist = report.get("qa_checklist", build_pile_design_qa_checklist(report))
+    bar_df = report.get("bar_df", pd.DataFrame())
+    pmm_df = report.get("pmm_df", pd.DataFrame())
+    mx_curve = report.get("mx_curve", pd.DataFrame())
+    my_curve = report.get("my_curve", pd.DataFrame())
+    shear_summary = report.get("shear_summary", {})
 
     doc = Document()
     section = doc.sections[0]
@@ -2568,16 +2995,41 @@ def build_pile_design_word_report(report):
         ("Pile H [m]", inputs.get("H", 0.0)),
         ("Pile length L [m]", inputs.get("L", 0.0)),
         ("Concrete fc [MPa]", inputs.get("fc", 0.0)),
-        ("Main reinforcement", inputs.get("main_bar", "-")),
+        ("Clear cover [mm]", inputs.get("cover_mm", 0.0)),
+        ("Main reinforcement", f"{len(bar_df) if bar_df is not None else 0}-{inputs.get('main_bar', '-')}") ,
         ("Provided As [mm2]", summary.get("as_provided_mm2", 0.0)),
         ("Tie / spiral bar", inputs.get("tie_bar", "-")),
         ("Tie spacing [mm]", inputs.get("tie_spacing_mm", 0.0)),
         ("Transverse system", inputs.get("transverse_system", "-")),
     ])
+    doc.add_paragraph("Pile section and longitudinal reinforcement layout used for the PMM section-capacity check:")
+    _docx_add_picture_or_note(
+        doc,
+        _docx_section_rebar_image(inputs, bar_df),
+        width_cm=10.5,
+        fallback="Pile section reinforcement figure could not be generated. Review in-app section preview."
+    )
 
-    _docx_add_dataframe(doc, "4. Load Cases Used", load_cases, max_rows=25, max_cols=6)
+    as_req_total = float(shear_summary.get("as_req_total_mm2", 0.0)) if isinstance(shear_summary, dict) else 0.0
+    as_prov = float(summary.get("as_provided_mm2", 0.0))
+    main_ok = bool(shear_summary.get("main_ok", as_prov >= as_req_total)) if isinstance(shear_summary, dict) else (as_prov >= as_req_total)
+    tie_ok = bool(summary.get("provided_tie_spacing_ok", True))
+    _docx_add_kv_table(doc, "4. Pile Reinforcement Design Summary", [
+        ("Main reinforcement provided", f"{len(bar_df) if bar_df is not None else 0}-{inputs.get('main_bar', '-')}") ,
+        ("As,min / preliminary required [mm2]", as_req_total),
+        ("As provided [mm2]", as_prov),
+        ("Longitudinal steel status", "OK" if main_ok else "NG"),
+        ("Tie / spiral provided", f"{inputs.get('tie_bar', '-')} @ {float(inputs.get('tie_spacing_mm', 0.0)):,.0f} mm"),
+        ("Recommended tie spacing [mm]", summary.get("recommended_tie_spacing_mm", 0.0)),
+        ("Tie spacing status", "OK" if tie_ok else "NG"),
+        ("Effective depth d [mm]", shear_summary.get("d_eff_mm", 0.0) if isinstance(shear_summary, dict) else 0.0),
+        ("Vc preliminary [kN]", (float(shear_summary.get("vc_n", 0.0)) / 1000.0) if isinstance(shear_summary, dict) else 0.0),
+        ("Shear / tie note", shear_summary.get("shear_status", "-") if isinstance(shear_summary, dict) else "-"),
+    ])
 
-    _docx_add_kv_table(doc, "5. Governing Design Summary", [
+    _docx_add_dataframe(doc, "5. Load Cases Used", load_cases, max_rows=25, max_cols=6)
+
+    _docx_add_kv_table(doc, "6. Governing Design Summary", [
         ("Governing load case", summary.get("governing_case", "-")),
         ("Max Pu [kN]", summary.get("overall_pu_max", 0.0)),
         ("Min Pu [kN]", summary.get("overall_pu_min", 0.0)),
@@ -2594,9 +3046,44 @@ def build_pile_design_word_report(report):
         ("Overall status", summary.get("overall_status", "-")),
     ])
 
-    _docx_add_dataframe(doc, "6. Load Case Result Table", demand_df, max_rows=30, max_cols=10)
+    _docx_add_dataframe(doc, "7. Load Case Result Table", demand_df, max_rows=30, max_cols=12)
 
-    doc.add_heading("7. Force Diagrams Along Pile", level=2)
+    _docx_add_kv_table(doc, "8. PMM Section Capacity Check", [
+        ("PMM method", "Preliminary ACI-style strain-compatible φPMM surface"),
+        ("Governing load case", summary.get("governing_case", "-")),
+        ("PMM utilization", summary.get("max_pmm_util", 0.0)),
+        ("Tension utilization", summary.get("max_tension_util", 0.0)),
+        ("Overall utilization", summary.get("max_util", 0.0)),
+        ("PMM status", "OK" if float(summary.get("max_pmm_util", 999.0)) <= 1.0 else "NG"),
+        ("Overall section status", summary.get("overall_status", "-")),
+        ("Pure steel tension capacity φTn [kN]", summary.get("phi_tn_kN", 0.0)),
+    ])
+    doc.add_paragraph(
+        "The PMM figures below show the section design-strength surface and demand points from the latest pile design run. "
+        "They are review figures only; final detailing, anchorage, confinement, and geotechnical uplift capacity must be checked separately."
+    )
+
+    doc.add_heading("9. PMM Figures — Section Capacity", level=2)
+    _docx_add_picture_or_note(
+        doc,
+        _docx_pmm_uniaxial_image(mx_curve, my_curve, demand_df),
+        width_cm=15.0,
+        fallback="Uniaxial PMM figure could not be generated. Review in-app PMM interaction diagrams."
+    )
+    _docx_add_picture_or_note(
+        doc,
+        _docx_pmm_slice_image(pmm_df, demand_df, summary),
+        width_cm=13.5,
+        fallback="Governing PMM slice figure could not be generated. Review in-app PMM slice diagram."
+    )
+    _docx_add_picture_or_note(
+        doc,
+        _docx_pmm_3d_image(pmm_df, demand_df, summary),
+        width_cm=15.0,
+        fallback="3D PMM surface figure could not be generated. Review in-app 3D PMM figure."
+    )
+
+    doc.add_heading("10. Force Diagrams Along Pile", level=2)
     gov_label = None
     if demand_df is not None and len(demand_df) > 0:
         gov_lc = str(summary.get("governing_case", ""))
@@ -2614,7 +3101,7 @@ def build_pile_design_word_report(report):
     else:
         doc.add_paragraph("Force diagram image could not be generated. See QA workbook Force_Profile sheet.")
 
-    doc.add_heading("8. Displacement Diagrams Along Pile", level=2)
+    doc.add_heading("11. Displacement Diagrams Along Pile", level=2)
     disp_img = _docx_profile_plot_image(
         profile_df, gov_label,
         ["Disp X [mm]", "Disp Y [mm]", "Disp resultant [mm]"],
@@ -2625,10 +3112,19 @@ def build_pile_design_word_report(report):
     else:
         doc.add_paragraph("Displacement diagram image could not be generated. See QA workbook Force_Profile sheet.")
 
-    _docx_add_dataframe(doc, "9. Head Boundary Sensitivity", sensitivity_df, max_rows=25, max_cols=10)
-    _docx_add_dataframe(doc, "10. QA Checklist", qa_checklist, max_rows=30, max_cols=4)
+    _docx_add_dataframe(doc, "12. Head Boundary Sensitivity", sensitivity_df, max_rows=25, max_cols=10)
+    _docx_add_dataframe(doc, "13. QA Checklist", qa_checklist, max_rows=30, max_cols=4)
+    _docx_add_dataframe(doc, "14. Final Report Review / Punch List", final_review, max_rows=40, max_cols=5)
 
-    doc.add_heading("11. Limitations / QA Notes", level=2)
+    _docx_add_kv_table(doc, "15. Design Conclusion", [
+        ("Governing case", summary.get("governing_case", "-")),
+        ("Structural PMM status", "OK" if float(summary.get("max_pmm_util", 999.0)) <= 1.0 else "NG"),
+        ("Tie spacing status", "OK" if bool(summary.get("provided_tie_spacing_ok", False)) else "NG"),
+        ("Overall status", summary.get("overall_status", "-")),
+        ("Action if NG", "Revise reinforcement / section / load path and re-run checks." if str(summary.get("overall_status", "-")).upper() != "OK" else "Proceed to independent design review and geotechnical verification."),
+    ])
+
+    doc.add_heading("16. Limitations / QA Notes", level=2)
     notes = [
         "This report is generated from the latest in-app calculation state. Re-run pile design after changing input data.",
         "Pile structural design is preliminary and must be reviewed against the governing project code, detailing, anchorage, constructability, geotechnical axial capacity, and uplift requirements.",
@@ -4208,6 +4704,10 @@ with tab4:
                             "tie_bar": tie_bar,
                             "tie_spacing_mm": float(tie_spacing_mm),
                             "transverse_system": transverse_system,
+                            "cover_mm": float(cover_mm),
+                            "n_main_bars": int(n_main_bars) if pile_type == "Round" else None,
+                            "n_b_face": int(n_b_face) if pile_type != "Round" else None,
+                            "n_h_face": int(n_h_face) if pile_type != "Round" else None,
                         },
                         "summary": {
                             "governing_case": str(governing["Load Case"]) if governing is not None else "-",
@@ -4236,8 +4736,14 @@ with tab4:
                         "demand_df": demand_df.copy(),
                         "profile_df": profile_df.copy(),
                         "sensitivity_df": pd.DataFrame(),
+                        "bar_df": bar_df.copy(),
+                        "pmm_df": pmm_df.copy(),
+                        "mx_curve": mx_curve.copy(),
+                        "my_curve": my_curve.copy(),
+                        "shear_summary": dict(shear_summary),
                     }
                     latest_report["qa_checklist"] = build_pile_design_qa_checklist(latest_report)
+                    latest_report["final_review_checklist"] = build_final_report_review_checklist(latest_report)
                     st.session_state["latest_pile_design_report"] = latest_report
 
                     st.subheader("Design Envelope")
@@ -5149,6 +5655,7 @@ with tab7:
         meta = report.get("meta", {})
         project = report.get("project", {})
         qa_checklist = report.get("qa_checklist", build_pile_design_qa_checklist(report))
+        final_review = report.get("final_review_checklist", build_final_report_review_checklist(report))
         if str(project.get("project_title", "")).strip():
             st.info(f"Project: {project.get('project_title')} | Structure: {project.get('structure_name', '-')}")
         c1, c2, c3, c4 = st.columns(4)
@@ -5166,6 +5673,18 @@ with tab7:
 
         st.markdown("### QA Checklist")
         st.dataframe(qa_checklist, use_container_width=True, hide_index=True, height=260)
+
+        st.markdown("### Final Report Review / Punch List")
+        fr_status = final_review["Status"].astype(str).str.upper() if final_review is not None and len(final_review) > 0 and "Status" in final_review.columns else pd.Series(dtype=str)
+        fr_ng = int((fr_status == "NG").sum())
+        fr_warn = int((fr_status == "WARN").sum())
+        if fr_ng:
+            st.error(f"Final report review has {fr_ng} NG item(s). Resolve before formal issue.")
+        elif fr_warn:
+            st.warning(f"Final report review has {fr_warn} warning item(s). Review and document acceptance before issue.")
+        else:
+            st.success("Final report review checklist has no NG/WARN items.")
+        st.dataframe(final_review, use_container_width=True, hide_index=True, height=320)
 
         report_md = build_pile_design_markdown_report(report)
         dl1, dl2, dl3 = st.columns(3)
@@ -5205,6 +5724,8 @@ with tab7:
         with st.expander("Data included in QA workbook", expanded=False):
             st.write("**QA checklist**")
             st.dataframe(qa_checklist, use_container_width=True, hide_index=True)
+            st.write("**Final report review / punch list**")
+            st.dataframe(final_review, use_container_width=True, hide_index=True)
             st.write("**Load cases**")
             st.dataframe(report.get("load_cases", pd.DataFrame()), use_container_width=True, hide_index=True)
             st.write("**Design demands**")
