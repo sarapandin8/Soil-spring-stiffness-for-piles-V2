@@ -65,10 +65,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-VERSION = 26  # E.4: case-by-case vs non-concurrent envelope design basis
+VERSION = 27  # R.3: project metadata + QA checklist in report
 
 #  CONSTANTS
 WIDGET_KEYS = [
+    "project_no", "project_title", "structure_name", "designer", "checker", "revision", "project_notes",
     "stage", "method", "pile_type",
     "D", "B", "H", "L", "fc", "dl", "nu",
     "wt", "scour", "use_group", "sD", "nx", "ny", "spring_output",
@@ -100,11 +101,12 @@ def _apply_pending_profile():
 def save_project_to_dict(
     design_stage, method, pile_type, D, B, H, L, fc, node_spacing, nu,
     water_table, scour_depth, use_group, s_D, nx, ny, spring_output,
-    soil_layers, app_version
+    soil_layers, app_version, project_meta=None
 ):
     """Create a dictionary with all project parameters for saving"""
     return {
         "app_version": app_version,
+        "project_meta": project_meta or {},
         "design_stage": design_stage,
         "method": method,
         "pile_type": pile_type,
@@ -129,6 +131,10 @@ def save_project_to_dict(
 def load_project_from_dict(data):
     """Load project parameters from dictionary and return session_state updates"""
     updates = {}
+    if isinstance(data.get("project_meta"), dict):
+        for _k, _v in data["project_meta"].items():
+            if _k in ("project_no", "project_title", "structure_name", "designer", "checker", "revision", "project_notes"):
+                updates[_k] = str(_v)
     key_map = {
         "design_stage": "stage",
         "method": "method",
@@ -2116,6 +2122,83 @@ def _df_to_markdown_table(df, max_rows=40):
     return "\n".join(lines)
 
 
+
+def build_pile_design_qa_checklist(report):
+    """Return a compact QA checklist for the latest pile design report."""
+    if not report:
+        return pd.DataFrame([{"Status": "NG", "Check": "Calculation run", "Finding": "No latest pile design calculation found.", "Action": "Run / Update Pile Design."}])
+    rows = []
+    meta = report.get("meta", {})
+    project = report.get("project", {})
+    inputs = report.get("inputs", {})
+    summary = report.get("summary", {})
+    load_cases = report.get("load_cases", pd.DataFrame())
+    demand_df = report.get("demand_df", pd.DataFrame())
+    sensitivity_df = report.get("sensitivity_df", pd.DataFrame())
+
+    def add(status, check, finding, action=""):
+        rows.append({"Status": status, "Check": check, "Finding": finding, "Action": action})
+
+    if str(project.get("project_title", "")).strip():
+        add("OK", "Project title", project.get("project_title", "-"), "")
+    else:
+        add("WARN", "Project title", "Project title is blank.", "Fill project metadata before issuing report.")
+
+    if str(meta.get("load_case_source", "")).strip() and meta.get("load_case_source") != "Manual / in-app table":
+        add("OK", "Load-case source", str(meta.get("load_case_source")), "")
+    else:
+        add("WARN", "Load-case source", "Load cases are manual or source was not identified.", "Attach STM transfer file or document source in notes.")
+
+    if load_cases is not None and len(load_cases) > 0:
+        add("OK", "Active load cases", f"{len(load_cases)} active case(s) checked.", "")
+    else:
+        add("NG", "Active load cases", "No active load cases found in report.", "Check load-case table and rerun.")
+
+    head = str(inputs.get("head_condition", ""))
+    if head.startswith("Fixed"):
+        add("OK", "Pile-head boundary", "Fixed head selected; head reaction moment solved internally.", "Compare with Free/Rotational sensitivity for design confidence.")
+    elif head.startswith("Rotational"):
+        add("WARN", "Pile-head boundary", f"Rotational spring selected, Kθ = {float(inputs.get('ktheta_head', 0.0)):,.0f} kN-m/rad.", "Use sensitivity or calibration to justify Kθ.")
+    else:
+        add("WARN", "Pile-head boundary", "Free-head / shear-only model selected.", "Confirm this reflects pile-cap restraint, or compare fixed-head case.")
+
+    if sensitivity_df is not None and len(sensitivity_df) > 0:
+        add("OK", "Head-boundary sensitivity", f"{len(sensitivity_df)} sensitivity result row(s) included.", "")
+    else:
+        add("WARN", "Head-boundary sensitivity", "Sensitivity was not run.", "Run head-condition sensitivity before finalizing design assumptions.")
+
+    basis = str(inputs.get("design_demand_basis", summary.get("design_demand_basis", "")))
+    if basis.startswith("Case-by-case"):
+        add("OK", "Design demand basis", basis, "")
+    else:
+        add("WARN", "Design demand basis", basis or "Not recorded.", "Case-by-case governing is recommended for final checks.")
+
+    max_util = float(summary.get("max_util", 0.0) or 0.0)
+    if max_util <= 1.0:
+        add("OK", "Overall utilization", f"Overall utilization = {max_util:.3f}", "")
+    else:
+        add("NG", "Overall utilization", f"Overall utilization = {max_util:.3f} > 1.0", "Revise section/reinforcement or assumptions.")
+
+    if bool(summary.get("provided_tie_spacing_ok", True)):
+        add("OK", "Tie spacing", "Provided tie spacing is not greater than preliminary recommended spacing.", "")
+    else:
+        add("WARN", "Tie spacing", "Provided tie spacing exceeds preliminary recommended spacing.", "Review shear/confinement detailing.")
+
+    if demand_df is not None and len(demand_df) > 0 and "Min Pu [kN]" in demand_df.columns:
+        min_pu = float(pd.to_numeric(demand_df["Min Pu [kN]"], errors="coerce").min())
+        if min_pu < 0.0:
+            add("WARN", "Uplift/tension", f"Minimum Pu = {min_pu:,.1f} kN (tension/uplift).", "Check pile uplift capacity, anchorage, and pile-cap transfer.")
+        else:
+            add("OK", "Uplift/tension", f"Minimum Pu = {min_pu:,.1f} kN.", "")
+
+    method = str(inputs.get("kh_method", ""))
+    if method == "Broms 1964":
+        add("WARN", "kh method", "Broms method selected; this is capacity-oriented.", "Treat elastic spring values as preliminary and cross-check with another method.")
+    elif method:
+        add("OK", "kh method", method, "")
+
+    return pd.DataFrame(rows)
+
 def build_pile_design_markdown_report(report):
     """Build a clean markdown QA/design summary from the latest pile-design run."""
     if not report:
@@ -2126,6 +2209,8 @@ def build_pile_design_markdown_report(report):
     demand_df = report.get("demand_df", pd.DataFrame())
     load_cases = report.get("load_cases", pd.DataFrame())
     sensitivity_df = report.get("sensitivity_df", pd.DataFrame())
+    project = report.get("project", {})
+    qa_checklist = report.get("qa_checklist", build_pile_design_qa_checklist(report))
 
     lines = []
     lines.append("# Pile Lateral Soil Spring Design Report")
@@ -2134,7 +2219,18 @@ def build_pile_design_markdown_report(report):
     lines.append(f"**App Version:** {meta.get('app_version', '-')}  ")
     lines.append(f"**Load-case source:** {meta.get('load_case_source', 'Manual / in-app table')}  ")
     lines.append("")
-    lines.append("## 1. Engineering Assumptions")
+    lines.append("## 1. Project / Calculation Header")
+    lines.append(f"- Project No.: **{project.get('project_no', '-')}**")
+    lines.append(f"- Project Title: **{project.get('project_title', '-')}**")
+    lines.append(f"- Structure / Location: **{project.get('structure_name', '-')}**")
+    lines.append(f"- Designer: **{project.get('designer', '-')}**")
+    lines.append(f"- Checker: **{project.get('checker', '-')}**")
+    lines.append(f"- Revision: **{project.get('revision', '-')}**")
+    notes = str(project.get('project_notes', '') or '').strip()
+    if notes:
+        lines.append(f"- Notes: {notes}")
+    lines.append("")
+    lines.append("## 2. Engineering Assumptions")
     lines.append(f"- kh method: **{inputs.get('kh_method', '-')}**")
     lines.append(f"- Design stage: **{inputs.get('design_stage', '-')}**")
     lines.append(f"- Spring source: **{inputs.get('spring_source', '-')}**")
@@ -2145,17 +2241,17 @@ def build_pile_design_markdown_report(report):
     lines.append("- PMM check: preliminary ACI-style strain-compatible phi-PMM surface with uplift/tension steel check.")
     lines.append("- Fixed Head solves the head reaction moment internally; do not double-count external pile-head moment from another model.")
     lines.append("")
-    lines.append("## 2. Pile and Reinforcement")
+    lines.append("## 3. Pile and Reinforcement")
     lines.append(f"- Pile type: **{inputs.get('pile_type', '-')}**")
     lines.append(f"- D/B/H/L: **D={inputs.get('D', 0.0):.2f} m, B={inputs.get('B', 0.0):.2f} m, H={inputs.get('H', 0.0):.2f} m, L={inputs.get('L', 0.0):.2f} m**")
     lines.append(f"- fc: **{inputs.get('fc', 0.0):.1f} MPa**")
     lines.append(f"- Main reinforcement: **{inputs.get('main_bar', '-')}**, provided As = **{summary.get('as_provided_mm2', 0.0):,.0f} mm2**")
     lines.append(f"- Transverse reinforcement: **{inputs.get('tie_bar', '-')} @ {inputs.get('tie_spacing_mm', 0.0):.0f} mm**, system = **{inputs.get('transverse_system', '-')}**")
     lines.append("")
-    lines.append("## 3. Load Cases Used")
+    lines.append("## 4. Load Cases Used")
     lines.append(_df_to_markdown_table(load_cases, max_rows=60))
     lines.append("")
-    lines.append("## 4. Governing Design Summary")
+    lines.append("## 5. Governing Design Summary")
     lines.append(f"- Governing load case: **{summary.get('governing_case', '-')}**")
     lines.append(f"- Max Pu: **{summary.get('overall_pu_max', 0.0):,.1f} kN**")
     lines.append(f"- Min Pu: **{summary.get('overall_pu_min', 0.0):,.1f} kN**")
@@ -2169,17 +2265,20 @@ def build_pile_design_markdown_report(report):
     lines.append(f"- Overall utilization: **{summary.get('max_util', 0.0):.3f}**")
     lines.append(f"- Overall status: **{summary.get('overall_status', '-')}**")
     lines.append("")
-    lines.append("## 5. Load Case Result Table")
+    lines.append("## 6. Load Case Result Table")
     lines.append(_df_to_markdown_table(demand_df.drop(columns=["Case Plot Label"], errors="ignore"), max_rows=80))
     lines.append("")
-    lines.append("## 6. Head Boundary Sensitivity")
+    lines.append("## 7. Head Boundary Sensitivity")
     if sensitivity_df is not None and len(sensitivity_df) > 0:
         lines.append("The table below brackets pile-head restraint uncertainty. Use it to judge whether free-head displacement or fixed/semi-fixed bending governs.")
         lines.append(_df_to_markdown_table(sensitivity_df, max_rows=80))
     else:
         lines.append("_Sensitivity was not run for the latest design calculation._")
     lines.append("")
-    lines.append("## 7. Limitations / QA Notes")
+    lines.append("## 8. QA Checklist")
+    lines.append(_df_to_markdown_table(qa_checklist, max_rows=80))
+    lines.append("")
+    lines.append("## 9. Limitations / QA Notes")
     lines.append("- This report is generated from the latest in-app calculation state. Re-run pile design after changing input data.")
     lines.append("- Pile structural design is preliminary and must be reviewed against the governing project code, detailing, anchorage, constructability, geotechnical axial capacity, and uplift requirements.")
     lines.append("- Soil spring stiffness is only as reliable as the input soil profile and selected kh method.")
@@ -2203,7 +2302,11 @@ def build_pile_design_report_xlsx(report):
         meta = report.get("meta", {}) if report else {}
         inputs = report.get("inputs", {}) if report else {}
         summary = report.get("summary", {}) if report else {}
+        project = report.get("project", {}) if report else {}
+        qa_checklist = report.get("qa_checklist", build_pile_design_qa_checklist(report)) if report else pd.DataFrame()
         summary_rows = []
+        for k, v in project.items():
+            summary_rows.append({"Group": "Project", "Item": k, "Value": v})
         for k, v in meta.items():
             summary_rows.append({"Group": "Meta", "Item": k, "Value": v})
         for k, v in inputs.items():
@@ -2218,6 +2321,7 @@ def build_pile_design_report_xlsx(report):
             ws.write(3, ci, col, fmt_header)
         ws.set_column(0, 0, 16); ws.set_column(1, 1, 34); ws.set_column(2, 2, 42)
         sheet_map = {
+            "QA_Checklist": qa_checklist,
             "Load_Cases": report.get("load_cases", pd.DataFrame()) if report else pd.DataFrame(),
             "Design_Demands": report.get("demand_df", pd.DataFrame()) if report else pd.DataFrame(),
             "Force_Profile": report.get("profile_df", pd.DataFrame()) if report else pd.DataFrame(),
@@ -2246,6 +2350,26 @@ for _msg_key, _box in (("_just_loaded_msg", st.sidebar.success),
 
 save_load_panel = st.sidebar.container()
 st.sidebar.markdown("---")
+
+st.sidebar.header("0. Project Metadata")
+with st.sidebar.expander("Calculation header", expanded=False):
+    project_no = st.text_input("Project No.", value="", key="project_no")
+    project_title = st.text_input("Project Title", value="", key="project_title")
+    structure_name = st.text_input("Structure / Location", value="", key="structure_name")
+    pc1, pc2 = st.columns(2)
+    designer = pc1.text_input("Designer", value="", key="designer")
+    checker = pc2.text_input("Checker", value="", key="checker")
+    revision = st.text_input("Revision", value="Rev. 0", key="revision")
+    project_notes = st.text_area("Calculation Notes", value="", key="project_notes", height=90)
+project_meta = {
+    "project_no": project_no,
+    "project_title": project_title,
+    "structure_name": structure_name,
+    "designer": designer,
+    "checker": checker,
+    "revision": revision,
+    "project_notes": project_notes,
+}
 
 st.sidebar.header("1. Project Settings")
 c1, c2 = st.sidebar.columns(2)
@@ -2503,7 +2627,7 @@ with save_load_panel:
     project_data = save_project_to_dict(
         design_stage, method, pile_type, D, B, H, L, fc, node_spacing, nu,
         water_table, scour_depth, use_group, s_D, nx, ny, spring_output,
-        df_soil, VERSION
+        df_soil, VERSION, project_meta=project_meta
     )
     json_str = json.dumps(project_data, indent=2, ensure_ascii=True)
     st.download_button(
@@ -3483,6 +3607,7 @@ with tab4:
 
                     # Store latest design run for Report / QA tab. This does not affect calculation results.
                     latest_report = {
+                        "project": project_meta.copy(),
                         "meta": {
                             "timestamp": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "app_version": VERSION,
@@ -3539,6 +3664,7 @@ with tab4:
                         "profile_df": profile_df.copy(),
                         "sensitivity_df": pd.DataFrame(),
                     }
+                    latest_report["qa_checklist"] = build_pile_design_qa_checklist(latest_report)
                     st.session_state["latest_pile_design_report"] = latest_report
 
                     st.subheader("Design Envelope")
@@ -3758,6 +3884,7 @@ with tab4:
                             sensitivity_df = pd.DataFrame(sensitivity_rows)
                             if "latest_pile_design_report" in st.session_state:
                                 st.session_state["latest_pile_design_report"]["sensitivity_df"] = sensitivity_df.copy()
+                                st.session_state["latest_pile_design_report"]["qa_checklist"] = build_pile_design_qa_checklist(st.session_state["latest_pile_design_report"])
                             if sensitivity_scope == "All active load cases":
                                 envelope_df = (
                                     sensitivity_df
@@ -4339,6 +4466,10 @@ with tab7:
         summary = report.get("summary", {})
         inputs = report.get("inputs", {})
         meta = report.get("meta", {})
+        project = report.get("project", {})
+        qa_checklist = report.get("qa_checklist", build_pile_design_qa_checklist(report))
+        if str(project.get("project_title", "")).strip():
+            st.info(f"Project: {project.get('project_title')} | Structure: {project.get('structure_name', '-')}")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Governing case", summary.get("governing_case", "-"))
         c2.metric("Overall Util.", f"{float(summary.get('max_util', 0.0)):.3f}", summary.get("overall_status", "-"))
@@ -4347,10 +4478,13 @@ with tab7:
 
         st.markdown("### QA Summary")
         qa_rows = []
-        for group_name, obj in (("Meta", meta), ("Input", inputs), ("Summary", summary)):
+        for group_name, obj in (("Project", project), ("Meta", meta), ("Input", inputs), ("Summary", summary)):
             for k, v in obj.items():
                 qa_rows.append({"Group": group_name, "Item": k, "Value": v})
         st.dataframe(pd.DataFrame(qa_rows), use_container_width=True, hide_index=True, height=300)
+
+        st.markdown("### QA Checklist")
+        st.dataframe(qa_checklist, use_container_width=True, hide_index=True, height=260)
 
         report_md = build_pile_design_markdown_report(report)
         dl1, dl2 = st.columns(2)
@@ -4377,6 +4511,8 @@ with tab7:
             st.markdown(report_md)
 
         with st.expander("Data included in QA workbook", expanded=False):
+            st.write("**QA checklist**")
+            st.dataframe(qa_checklist, use_container_width=True, hide_index=True)
             st.write("**Load cases**")
             st.dataframe(report.get("load_cases", pd.DataFrame()), use_container_width=True, hide_index=True)
             st.write("**Design demands**")
