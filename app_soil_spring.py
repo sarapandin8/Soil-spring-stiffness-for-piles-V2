@@ -65,7 +65,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-VERSION = 29  # D.1: add displacement diagrams along pile in Pile Design
+VERSION = 30  # V.2: add external validation package templates
 
 #  CONSTANTS
 WIDGET_KEYS = [
@@ -3408,6 +3408,180 @@ def build_verification_workbook(summary_df, detail_df, tolerance_pct):
         ws.set_column(0, len(detail_df.columns) - 1, 20)
     return buf.getvalue()
 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# V.2 External validation package templates
+# These functions do not validate against external software automatically. They
+# create a controlled package for engineers to compare the app with LPILE/FEA/
+# hand checks and document acceptance before using the app for project design.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def external_validation_case_plan_dataframe():
+    """Recommended external validation cases for project sign-off."""
+    return pd.DataFrame([
+        {
+            "Validation Case": "EV-01 Free-head round pile",
+            "Purpose": "Benchmark basic free-head lateral response",
+            "Reference source": "LPILE / SAP2000 beam+spring / hand check",
+            "Pile / soil model": "Round pile, uniform kh, single lateral load",
+            "Required comparison metrics": "y_head, M_max, z@Mmax, V_max, reaction balance",
+            "Acceptance target": "≤ 10% for displacement/moment; explain model-basis differences",
+        },
+        {
+            "Validation Case": "EV-02 Fixed-head round pile",
+            "Purpose": "Check fixed-head restraint and reaction moment",
+            "Reference source": "LPILE fixed-head / FEA beam+spring",
+            "Pile / soil model": "Same as EV-01 with theta_head = 0",
+            "Required comparison metrics": "M_head, y_head, M_max, z@Mmax, V_max",
+            "Acceptance target": "≤ 10% for key response; M_head sign must be consistent",
+        },
+        {
+            "Validation Case": "EV-03 Rotational-spring sensitivity",
+            "Purpose": "Check semi-rigid head-condition interpolation",
+            "Reference source": "FEA model with rotational spring at pile head",
+            "Pile / soil model": "Ktheta = 1e4, 1e5, 1e6 kN-m/rad",
+            "Required comparison metrics": "M_head vs Ktheta trend, y_head trend, M_max trend",
+            "Acceptance target": "Monotonic transition from Free to Fixed; numerical difference explained",
+        },
+        {
+            "Validation Case": "EV-04 STM imported pile force",
+            "Purpose": "Validate STM-to-soil-spring transfer workflow",
+            "Reference source": "Pile Cap STM exported TSV + independent FEA check",
+            "Pile / soil model": "Pu/Hx/Hy imported from STM for one governing pile",
+            "Required comparison metrics": "input traceability, y_head, M_max, section utilization",
+            "Acceptance target": "Imported forces match STM export exactly; response within agreed tolerance",
+        },
+        {
+            "Validation Case": "EV-05 Rectangular pile X/Y axes",
+            "Purpose": "Check rectangular-pile inertia and soil-reaction-width convention",
+            "Reference source": "Hand calculation of Ixx/Iyy + FEA beam+spring",
+            "Pile / soil model": "Rectangular pile checked for X and Y loading separately",
+            "Required comparison metrics": "I used, reaction width used, y_head, M_max, sign convention",
+            "Acceptance target": "Axis convention documented; trends match stiffness ratio Ix/Iy",
+        },
+        {
+            "Validation Case": "EV-06 PMM section capacity",
+            "Purpose": "Validate reinforced concrete section capacity check",
+            "Reference source": "Independent RC section software / spreadsheet",
+            "Pile / soil model": "Same pile section and reinforcement as app report",
+            "Required comparison metrics": "Pn, Mx, My capacity, utilization, governing case",
+            "Acceptance target": "≤ 5–10% depending on mesh/strain-block method; phi factors consistent",
+        },
+    ])
+
+
+def external_validation_results_template_dataframe():
+    """Blank comparison table for app vs external reference results."""
+    rows = []
+    metrics = [
+        "Head displacement y_head [mm]",
+        "Head rotation theta_head [rad]",
+        "Head reaction moment M_head [kN-m]",
+        "Maximum moment M_max [kN-m]",
+        "Depth at M_max [m]",
+        "Maximum shear V_max [kN]",
+        "Reaction balance error [kN]",
+        "PMM utilization [-]",
+    ]
+    for case_id in ["EV-01", "EV-02", "EV-03", "EV-04", "EV-05", "EV-06"]:
+        for metric in metrics:
+            rows.append({
+                "Validation Case": case_id,
+                "Metric": metric,
+                "App Result": "",
+                "Reference Result": "",
+                "Difference": "",
+                "% Difference": "",
+                "Tolerance / Acceptance": "",
+                "Status (OK/NG/WARN)": "",
+                "Reviewer Notes": "",
+            })
+    return pd.DataFrame(rows)
+
+
+def external_validation_sign_convention_checklist():
+    """Checklist items that must be locked before external validation."""
+    return pd.DataFrame([
+        {"Check Item": "Pu sign convention", "Expected documentation": "Compression and tension sign clearly stated", "Status": "To be checked", "Notes": ""},
+        {"Check Item": "Hx / Hy direction", "Expected documentation": "Global X/Y directions match STM export and soil-spring app", "Status": "To be checked", "Notes": ""},
+        {"Check Item": "Mx / My convention in PMM", "Expected documentation": "Moment axes and positive signs match plotted PMM coordinates", "Status": "To be checked", "Notes": ""},
+        {"Check Item": "Fixed-head reaction moment sign", "Expected documentation": "Reaction moment sign explained; magnitude used for design", "Status": "To be checked", "Notes": ""},
+        {"Check Item": "Rectangular pile axes", "Expected documentation": "Ixx/Iyy and soil reaction width for X/Y loading documented", "Status": "To be checked", "Notes": ""},
+        {"Check Item": "Units", "Expected documentation": "kN, m, MPa, kN-m/rad are consistent between app and reference model", "Status": "To be checked", "Notes": ""},
+        {"Check Item": "Load transfer from STM", "Expected documentation": "Hux/Huy are direct pile-head shears only; internal STM tie force is not exported as pile shear", "Status": "To be checked", "Notes": ""},
+    ])
+
+
+def external_validation_acceptance_criteria_dataframe():
+    """Suggested acceptance bands for engineering review."""
+    return pd.DataFrame([
+        {"Category": "Displacement response", "Suggested acceptance": "≤ 10% typical", "Comment": "Larger difference may be acceptable if soil model, spring spacing, or boundary assumptions differ."},
+        {"Category": "Maximum moment", "Suggested acceptance": "≤ 10% typical", "Comment": "Must compare at same load level, head condition, EI, and spring distribution."},
+        {"Category": "Depth of maximum moment", "Suggested acceptance": "Within one node spacing", "Comment": "Depth mismatch often follows from node spacing or interpolation."},
+        {"Category": "Reaction equilibrium", "Suggested acceptance": "Near zero residual", "Comment": "Large residual indicates solver, unit, or sign error."},
+        {"Category": "PMM capacity", "Suggested acceptance": "≤ 5–10%", "Comment": "Depends on fiber mesh, beta1, phi transition, and compression-cap treatment."},
+        {"Category": "Sign convention", "Suggested acceptance": "No unexplained mismatch", "Comment": "Magnitude agreement is not enough if sign convention is ambiguous."},
+    ])
+
+
+def build_external_validation_markdown_package():
+    """Build a markdown starter package for external validation."""
+    lines = []
+    lines.append("# External Validation Package — Pile Soil Spring App")
+    lines.append("")
+    lines.append(f"Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"App version: {VERSION}")
+    lines.append("")
+    lines.append("## Purpose")
+    lines.append("This package is a structured template for validating the app against independent reference tools such as LPILE, SAP2000/CSI beam-on-spring models, PLAXIS, hand calculations, or calibrated project models.")
+    lines.append("")
+    lines.append("## Recommended Validation Case Plan")
+    lines.append(_df_to_markdown_table(external_validation_case_plan_dataframe(), max_rows=20))
+    lines.append("")
+    lines.append("## Sign Convention Checklist")
+    lines.append(_df_to_markdown_table(external_validation_sign_convention_checklist(), max_rows=20))
+    lines.append("")
+    lines.append("## Suggested Acceptance Criteria")
+    lines.append(_df_to_markdown_table(external_validation_acceptance_criteria_dataframe(), max_rows=20))
+    lines.append("")
+    lines.append("## Results Template")
+    lines.append(_df_to_markdown_table(external_validation_results_template_dataframe(), max_rows=60))
+    lines.append("")
+    lines.append("## Engineering Note")
+    lines.append("The app should be treated as high-end beta / engineering-review-ready until external validation results are completed and approved for the intended project/design basis.")
+    return "\n".join(lines)
+
+
+def build_external_validation_workbook():
+    """Build an Excel workbook template for external validation documentation."""
+    try:
+        import xlsxwriter  # noqa: F401
+    except Exception as exc:
+        raise RuntimeError("xlsxwriter is required to export external validation workbook. Install it with: pip install xlsxwriter") from exc
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        wb = writer.book
+        fmt_title = wb.add_format({"bold": True, "font_size": 14, "font_color": "#1F4E79"})
+        fmt_note = wb.add_format({"italic": True, "font_color": "#666666", "text_wrap": True})
+        sheets = [
+            ("Validation_Case_Plan", external_validation_case_plan_dataframe(), "Recommended External Validation Case Plan"),
+            ("Results_Template", external_validation_results_template_dataframe(), "App vs External Reference Results Template"),
+            ("Sign_Convention", external_validation_sign_convention_checklist(), "Sign Convention Checklist"),
+            ("Acceptance_Criteria", external_validation_acceptance_criteria_dataframe(), "Suggested Acceptance Criteria"),
+        ]
+        for sheet_name, df, title in sheets:
+            df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=4)
+            ws = writer.sheets[sheet_name]
+            ws.write(0, 0, title, fmt_title)
+            ws.write(1, 0, f"Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')} | App version: {VERSION}", fmt_note)
+            ws.write(2, 0, "External validation must be completed by the engineer/checker before adopting the app as a project design basis.", fmt_note)
+            for col_idx, col_name in enumerate(df.columns):
+                width = min(max(len(str(col_name)) + 4, 16), 42)
+                ws.set_column(col_idx, col_idx, width)
+    buf.seek(0)
+    return buf.getvalue()
+
 st.sidebar.title("Pile Spring Calculator")
 st.sidebar.caption(f"version {VERSION}")
 
@@ -3561,8 +3735,8 @@ st.caption("Units: kN, m  |  Methods: JRA / Terzaghi 1955 / Vesic 1961 / Broms 1
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "Input & Pile Section", "Results & Profile", "kh & Spring Plots",
-    "Pile Design", "N-SPT Reference", "Formulas & References", "Report / QA",
-    "Verification"
+    "Pile Design", "Report / QA", "Verification", "N-SPT Reference",
+    "Formulas & References"
 ])
 
 with tab1:
@@ -5581,7 +5755,7 @@ with tab4:
                         )
 
         st.divider()
-with tab5:
+with tab7:
     st.subheader("N-SPT Reference Values")
     st.markdown("### Clay")
     clay_ref = [{"Consistency": cons, "Typical N": db["N"], "cu [kPa]": db["cu"],
@@ -5595,7 +5769,7 @@ with tab5:
                 for cons, db in SOIL_DB["Sand"].items()]
     st.dataframe(pd.DataFrame(sand_ref), use_container_width=True, hide_index=True)
 
-with tab6:
+with tab8:
     st.subheader("Formulas & References")
     st.markdown("**1. JRA:** $k_h = \\dfrac{E_0}{B_0} \\left(\\dfrac{D}{B_0}\\right)^{-3/4}$, $B_0=0.3$ m")
     st.markdown("**2. Terzaghi (Sand):** $k_h = \\dfrac{n_h \\cdot z}{D}$  |  **Clay:** $k_h = \\dfrac{\\alpha \\cdot c_u}{D}$")
@@ -5629,7 +5803,7 @@ with tab6:
 7. **Reese, L.C. & Van Impe, W.F. (2011)** - *Single Piles and Pile Groups Under Lateral Loading*.
 """)
 
-with tab7:
+with tab5:
     st.subheader("Report / QA")
     st.caption(
         "Professional traceability output for the latest Pile Design run. "
@@ -5737,7 +5911,7 @@ with tab7:
             else:
                 st.info("Head-boundary sensitivity was not run for the latest design calculation.")
 
-with tab8:
+with tab6:
     st.subheader("Verification / Benchmark")
     st.caption(
         "Regression benchmark checks for the lateral-response solver and pile-head boundary conditions. "
@@ -5747,6 +5921,46 @@ with tab8:
         "These benchmarks compare the app against locked internal baseline values. "
         "They are not a substitute for independent validation against LPILE/FEA or pile load-test data."
     )
+
+    st.markdown("### V.2 External Validation Package")
+    st.info(
+        "Use this package to compare the app against independent reference tools such as LPILE, "
+        "SAP2000/CSI beam-on-spring models, PLAXIS, hand calculations, or calibrated project models. "
+        "The app should be treated as engineering-review-ready until this external validation package is completed."
+    )
+    ext_case_plan = external_validation_case_plan_dataframe()
+    st.dataframe(ext_case_plan, use_container_width=True, hide_index=True, height=230)
+
+    ev1, ev2 = st.columns(2)
+    ev_md = build_external_validation_markdown_package()
+    ev1.download_button(
+        "Download External Validation Package (.md)",
+        data=ev_md.encode("utf-8"),
+        file_name=f"PileSoilSpring_ExternalValidation_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.md",
+        mime="text/markdown",
+        use_container_width=True,
+    )
+    try:
+        ev_xlsx = build_external_validation_workbook()
+        ev2.download_button(
+            "Download External Validation Workbook (.xlsx)",
+            data=ev_xlsx,
+            file_name=f"PileSoilSpring_ExternalValidation_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    except RuntimeError as exc:
+        ev2.error(str(exc))
+
+    with st.expander("External validation checklist and acceptance criteria", expanded=False):
+        st.write("**Sign convention checklist**")
+        st.dataframe(external_validation_sign_convention_checklist(), use_container_width=True, hide_index=True)
+        st.write("**Suggested acceptance criteria**")
+        st.dataframe(external_validation_acceptance_criteria_dataframe(), use_container_width=True, hide_index=True)
+        st.write("**Blank results-comparison template**")
+        st.dataframe(external_validation_results_template_dataframe(), use_container_width=True, hide_index=True, height=320)
+
+    st.markdown("---")
 
     st.markdown("### Benchmark Cases")
     st.dataframe(verification_cases_dataframe(), use_container_width=True, hide_index=True, height=240)
