@@ -65,7 +65,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-VERSION = 21  # bumped: improve tab navigation styling only
+VERSION = 22  # bumped: INT.2 import/transfer load cases from Pile Cap STM
 
 #  CONSTANTS
 WIDGET_KEYS = [
@@ -702,6 +702,46 @@ def parse_pasted_load_cases(paste_text):
     if parsed.empty:
         raise ValueError("The pasted table did not contain any usable load cases.")
     return parsed
+
+
+def parse_uploaded_load_case_file(uploaded_file):
+    """Parse .tsv/.csv/.xlsx load cases exported from Pile Cap STM or Excel.
+
+    Expected engineering transfer schema is:
+        Use | Load Case | Pu [kN] | Hx [kN] | Hy [kN]
+
+    The parser also accepts the shorter formats supported by
+    parse_pasted_load_cases(). Returned data are calculation-ready and use the
+    Soil Spring app's stable load-case column names.
+    """
+    if uploaded_file is None:
+        raise ValueError("No file was uploaded.")
+
+    name = str(getattr(uploaded_file, "name", "") or "").lower()
+    raw = uploaded_file.getvalue()
+
+    if name.endswith((".xlsx", ".xls")):
+        try:
+            df = pd.read_excel(BytesIO(raw))
+        except Exception as exc:
+            raise ValueError(f"Cannot read Excel workbook: {exc}")
+        if df.empty:
+            raise ValueError("The uploaded workbook is empty.")
+        return clean_pile_load_cases(df, drop_blank=True)
+
+    # Text-based transfer files: TSV, CSV, TXT. Use UTF-8 first, then a common
+    # Windows fallback so files opened/saved through Excel remain usable.
+    for enc in ("utf-8-sig", "utf-8", "cp874", "cp1252"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            text = None
+    if text is None:
+        raise ValueError("Cannot decode uploaded text file. Please save as UTF-8 TSV/CSV.")
+
+    return parse_pasted_load_cases(text)
+
 
 def validate_soil_profile(df):
     """Validate gaps, overlaps, and depth order in the soil profile."""
@@ -2763,11 +2803,39 @@ with tab4:
         if "pile_design_load_cases" not in st.session_state:
             st.session_state["pile_design_load_cases"] = default_load_cases.copy()
 
-        with st.expander("Paste formatted load cases from Excel", expanded=False):
+        with st.expander("Import load cases from Pile Cap STM / Excel", expanded=False):
             st.caption(
-                "Recommended Excel format: Use | Load Case | Pu [kN] | Hx [kN] | Hy [kN]. "
+                "Recommended transfer format: Use | Load Case | Pu [kN] | Hx [kN] | Hy [kN]. "
+                "This matches the Soil Spring Input (.tsv) exported from the Pile Cap STM app. "
                 "You may also paste only Load Case | Pu [kN] | Hx [kN] | Hy [kN]."
             )
+
+            uploaded_lc_file = st.file_uploader(
+                "Upload Soil Spring Input from Pile Cap STM (.tsv/.csv/.xlsx)",
+                type=["tsv", "csv", "txt", "xlsx", "xls"],
+                key="pile_design_load_case_upload",
+                help=(
+                    "Use the .tsv exported by the Pile Cap STM app, or an Excel file "
+                    "with columns Use, Load Case, Pu [kN], Hx [kN], Hy [kN]."
+                ),
+            )
+            up_col1, up_col2 = st.columns([1.0, 3.0])
+            if up_col1.button("Import uploaded file", use_container_width=True):
+                try:
+                    imported_cases = parse_uploaded_load_case_file(uploaded_lc_file)
+                    st.session_state["pile_design_load_cases"] = imported_cases.copy()
+                    st.session_state["pile_design_load_case_source"] = (
+                        getattr(uploaded_lc_file, "name", "uploaded file") if uploaded_lc_file is not None else "uploaded file"
+                    )
+                    if "pile_design_load_case_editor" in st.session_state:
+                        del st.session_state["pile_design_load_case_editor"]
+                    st.success(f"Imported {len(imported_cases)} load cases from uploaded file.")
+                except Exception as e:
+                    st.error(f"Cannot import uploaded load cases: {e}")
+            up_col2.caption(
+                "Import replaces the current load-case table. Check signs: compression Pu is positive; uplift is negative."
+            )
+
             paste_text = st.text_area(
                 "Paste Excel cells here",
                 value="",
@@ -2784,6 +2852,7 @@ with tab4:
                 try:
                     imported_cases = parse_pasted_load_cases(paste_text)
                     st.session_state["pile_design_load_cases"] = imported_cases.copy()
+                    st.session_state["pile_design_load_case_source"] = "Excel/clipboard paste"
                     if "pile_design_load_case_editor" in st.session_state:
                         del st.session_state["pile_design_load_case_editor"]
                     st.success(f"Imported {len(imported_cases)} load cases from Excel paste.")
@@ -2791,10 +2860,17 @@ with tab4:
                     st.error(f"Cannot import pasted load cases: {e}")
             if imp_col2.button("Reset default cases", use_container_width=True):
                 st.session_state["pile_design_load_cases"] = default_load_cases.copy()
+                st.session_state.pop("pile_design_load_case_source", None)
                 if "pile_design_load_case_editor" in st.session_state:
                     del st.session_state["pile_design_load_case_editor"]
                 st.info("Default load cases restored.")
             imp_col3.caption("Import replaces the current load-case table only. Calculation formulas are unchanged.")
+
+        if st.session_state.get("pile_design_load_case_source"):
+            st.info(
+                f"Current load-case table source: {st.session_state['pile_design_load_case_source']} "
+                "(verify units and signs before design)."
+            )
 
         load_case_input = st.data_editor(
             st.session_state["pile_design_load_cases"],
