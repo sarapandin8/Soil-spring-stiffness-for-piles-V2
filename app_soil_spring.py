@@ -65,7 +65,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-VERSION = 25  # R.2: professional report / QA traceability
+VERSION = 26  # E.4: case-by-case vs non-concurrent envelope design basis
 
 #  CONSTANTS
 WIDGET_KEYS = [
@@ -2140,6 +2140,7 @@ def build_pile_design_markdown_report(report):
     lines.append(f"- Spring source: **{inputs.get('spring_source', '-')}**")
     lines.append(f"- Head condition: **{inputs.get('head_condition', '-')}**")
     lines.append(f"- Ktheta head: **{inputs.get('ktheta_head', 0.0):,.0f} kN-m/rad**")
+    lines.append(f"- Preliminary shear/tie design basis: **{inputs.get('design_demand_basis', summary.get('design_demand_basis', '-'))}**")
     lines.append(f"- Water table: **{inputs.get('water_table', 0.0):.2f} m**; scour depth: **{inputs.get('scour_depth', 0.0):.2f} m**")
     lines.append("- PMM check: preliminary ACI-style strain-compatible phi-PMM surface with uplift/tension steel check.")
     lines.append("- Fixed Head solves the head reaction moment internally; do not double-count external pile-head moment from another model.")
@@ -2161,6 +2162,8 @@ def build_pile_design_markdown_report(report):
     lines.append(f"- Max |Mux|: **{summary.get('overall_mx', 0.0):,.1f} kN-m**")
     lines.append(f"- Max |Muy|: **{summary.get('overall_my', 0.0):,.1f} kN-m**")
     lines.append(f"- Max |V|: **{summary.get('overall_v', 0.0):,.1f} kN**")
+    lines.append(f"- Shear/tie demand source: **{summary.get('shear_design_case', '-')}**")
+    lines.append(f"- Shear/tie design demand: **Pu={summary.get('shear_design_pu_kN', 0.0):,.1f} kN, V={summary.get('shear_design_v_kN', 0.0):,.1f} kN, M={summary.get('shear_design_m_kN_m', 0.0):,.1f} kN-m**")
     lines.append(f"- PMM utilization: **{summary.get('max_pmm_util', 0.0):.3f}**")
     lines.append(f"- Tension utilization: **{summary.get('max_tension_util', 0.0):.3f}**")
     lines.append(f"- Overall utilization: **{summary.get('max_util', 0.0):.3f}**")
@@ -2180,6 +2183,7 @@ def build_pile_design_markdown_report(report):
     lines.append("- This report is generated from the latest in-app calculation state. Re-run pile design after changing input data.")
     lines.append("- Pile structural design is preliminary and must be reviewed against the governing project code, detailing, anchorage, constructability, geotechnical axial capacity, and uplift requirements.")
     lines.append("- Soil spring stiffness is only as reliable as the input soil profile and selected kh method.")
+    lines.append("- Case-by-case design basis is recommended. Non-concurrent envelope demand may combine maxima from different load cases and should be treated as a screening check.")
     lines.append("- For final work, keep this report with the exported spring workbook and the source pile-cap STM transfer file.")
     return "\n".join(lines)
 
@@ -3064,6 +3068,30 @@ with tab4:
         else:
             sensitivity_scope = "Governing case from current design"
 
+        st.subheader("Design Demand Basis")
+        design_demand_basis = st.radio(
+            "Preliminary reinforcement/shear demand basis",
+            [
+                "Case-by-case governing (recommended)",
+                "Non-concurrent envelope (legacy / conservative)",
+            ],
+            index=0,
+            horizontal=True,
+            help=(
+                "Case-by-case uses the actual governing load case and its concurrent response. "
+                "Non-concurrent envelope combines maxima that may come from different load cases; keep it only as a conservative legacy screen."
+            ),
+        )
+        if design_demand_basis.startswith("Case-by-case"):
+            st.caption(
+                "Recommended: design summary uses the governing load case and concurrent max force resultants from that case."
+            )
+        else:
+            st.warning(
+                "Legacy envelope mode may combine Pu, V, Mx and My from different load cases. "
+                "Use only as a conservative screening check, not as the only final design basis."
+            )
+
         st.subheader("Load Cases")
         default_load_cases = pd.DataFrame({
             "Use": [True, True, True],
@@ -3214,6 +3242,7 @@ with tab4:
             "transverse_system": transverse_system,
             "head_condition": head_condition,
             "ktheta_head": float(ktheta_head),
+            "design_demand_basis": design_demand_basis,
             "n_main_bars": None if n_main_bars is None else int(n_main_bars),
             "n_b_face": None if n_b_face is None else int(n_b_face),
             "n_h_face": None if n_h_face is None else int(n_h_face),
@@ -3392,6 +3421,8 @@ with tab4:
                         "z @ Mux [m]": float(depths[imx]),
                         "Max |Muy| [kN-m]": float(np.max(np.abs(moment_y))),
                         "z @ Muy [m]": float(depths[imy]),
+                        "Max M resultant [kN-m]": float(np.max(moment_resultant)),
+                        "z @ M resultant [m]": float(depths[int(np.argmax(moment_resultant))]) if len(moment_resultant) else 0.0,
                         "Max |V| [kN]": float(np.max(np.abs(shear_resultant))),
                         "z @ V [m]": float(depths[iv]),
                         "PMM Util.": float(np.max(util_profile)),
@@ -3430,9 +3461,22 @@ with tab4:
                     overall_v = float(demand_df["Max |V| [kN]"].max())
                     overall_m = float(np.sqrt(overall_mx**2 + overall_my**2))
 
+                    if design_demand_basis.startswith("Case-by-case") and governing is not None:
+                        shear_design_case = str(governing["Load Case"])
+                        shear_design_pu = max(float(governing["Max Pu [kN]"]), 0.0)
+                        shear_design_v = float(governing["Max |V| [kN]"])
+                        shear_design_m = float(governing.get("Max M resultant [kN-m]", governing.get("PMM M resultant [kN-m]", 0.0)))
+                        shear_design_note = "Case-by-case governing demand; force resultants are from the controlling load case."
+                    else:
+                        shear_design_case = "Non-concurrent envelope"
+                        shear_design_pu = max(overall_pu_max, 0.0)
+                        shear_design_v = overall_v
+                        shear_design_m = overall_m
+                        shear_design_note = "Legacy envelope demand; maxima may come from different load cases."
+
                     shear_summary = calc_pile_design_summary(
                         pile_type, D, B, H, fc, cover_mm, main_bar, tie_bar,
-                        "X", max(overall_pu_max, 0.0), overall_v, overall_m,
+                        "X", shear_design_pu, shear_design_v, shear_design_m,
                         n_main_bars, n_b_face, n_h_face, n_tie_legs, as_ratio_rec
                     )
                     tie_ok = float(tie_spacing_mm) <= float(shear_summary["s_rec_mm"]) + 1e-9
@@ -3452,6 +3496,7 @@ with tab4:
                             "y_design_row": int(y_design_row),
                             "head_condition": head_condition,
                             "ktheta_head": float(ktheta_head),
+                            "design_demand_basis": design_demand_basis,
                             "pile_type": pile_type,
                             "D": float(D),
                             "B": float(B),
@@ -3474,6 +3519,12 @@ with tab4:
                             "overall_my": float(overall_my),
                             "overall_v": float(overall_v),
                             "overall_m_resultant_envelope": float(overall_m),
+                            "design_demand_basis": design_demand_basis,
+                            "shear_design_case": shear_design_case,
+                            "shear_design_pu_kN": float(shear_design_pu),
+                            "shear_design_v_kN": float(shear_design_v),
+                            "shear_design_m_kN_m": float(shear_design_m),
+                            "shear_design_note": shear_design_note,
                             "max_pmm_util": float(max_pmm_util),
                             "max_tension_util": float(max_tension_util),
                             "max_util": float(max_util),
@@ -3497,6 +3548,11 @@ with tab4:
                     env3.metric("Max |Mux| [kN-m]", f"{overall_mx:,.1f}")
                     env4.metric("Max |Muy| [kN-m]", f"{overall_my:,.1f}")
                     env5.metric("Max Overall Util.", f"{max_util:,.2f}", "OK" if max_util <= 1.0 else "Increase steel / check uplift")
+                    st.caption(
+                        f"Preliminary shear/tie design basis: {design_demand_basis}. "
+                        f"Demand source = {shear_design_case}; Pu = {shear_design_pu:,.1f} kN, "
+                        f"V = {shear_design_v:,.1f} kN, M = {shear_design_m:,.1f} kN-m."
+                    )
 
                     left_design, right_design = st.columns([1.05, 1.15], gap="large")
                     with left_design:
@@ -3516,6 +3572,7 @@ with tab4:
                             ("Uplift/tension", "OK" if max_tension_util <= 1.0 else "NG", f"φTn = {phi_tn_kN:,.1f} kN; max tension U = {max_tension_util:.3f}"),
                             ("Overall structural", "OK" if max_util <= 1.0 else "NG", f"governing = {governing['Load Case'] if governing is not None else '-'}"),
                             ("Recommended tie spacing", f"{shear_summary['s_rec_mm']:.0f} mm", "preliminary shear/confinement check"),
+                            ("Shear/tie demand basis", shear_design_case, shear_design_note),
                         ]
                         st.table(pd.DataFrame(section_info, columns=["Item", "Value", "Note"]))
                         if max_pmm_util > 1.0:
@@ -3539,6 +3596,8 @@ with tab4:
                                 "z @ Mux [m]": "{:.2f}",
                                 "Max |Muy| [kN-m]": "{:,.1f}",
                                 "z @ Muy [m]": "{:.2f}",
+                                "Max M resultant [kN-m]": "{:,.1f}",
+                                "z @ M resultant [m]": "{:.2f}",
                                 "Max |V| [kN]": "{:,.1f}",
                                 "z @ V [m]": "{:.2f}",
                                 "PMM Util.": "{:.3f}",
