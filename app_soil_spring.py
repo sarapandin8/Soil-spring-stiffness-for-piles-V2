@@ -65,7 +65,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-VERSION = 27  # R.3: project metadata + QA checklist in report
+VERSION = 28  # V.1: verification benchmark test cases / regression checks
 
 #  CONSTANTS
 WIDGET_KEYS = [
@@ -2340,6 +2340,274 @@ def build_pile_design_report_xlsx(report):
     buf.seek(0)
     return buf.getvalue()
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# V.1 Verification / benchmark test cases
+# These tests are intentionally independent from Streamlit widgets. They provide
+# regression checks for the lateral-response solver and head-boundary behavior.
+# They do not replace external validation against LPILE/FEA; they protect the
+# app against accidental internal changes in future milestones.
+# ─────────────────────────────────────────────────────────────────────────────
+
+VERIFICATION_BENCHMARKS = [
+    {
+        "Case ID": "V1-FREE-ROUND",
+        "Description": "Round pile, uniform soil, free head",
+        "Pile Type": "Round", "D": 1.0, "B": 1.0, "Hsec": 1.0, "fc": 35.0,
+        "L": 20.0, "dL": 1.0, "kh": 15000.0, "Hload": 100.0,
+        "Axis": "X", "Head Condition": "Free Head / Shear Only", "Ktheta": 0.0,
+        "Expected": {
+            "Head displacement [mm]": 3.001988,
+            "Head rotation [rad]": -0.000681,
+            "Head restraint moment [kN-m]": 0.0,
+            "Max displacement [mm]": 3.001988,
+            "Max moment [kN-m]": 136.900437,
+            "z @ max moment [m]": 3.0,
+            "Max shear [kN]": 77.485092,
+            "Reaction balance error [kN]": 0.0,
+        },
+    },
+    {
+        "Case ID": "V2-FIXED-ROUND",
+        "Description": "Round pile, uniform soil, fixed head",
+        "Pile Type": "Round", "D": 1.0, "B": 1.0, "Hsec": 1.0, "fc": 35.0,
+        "L": 20.0, "dL": 1.0, "kh": 15000.0, "Hload": 100.0,
+        "Axis": "X", "Head Condition": "Fixed Head (theta = 0)", "Ktheta": 0.0,
+        "Expected": {
+            "Head displacement [mm]": 1.526525,
+            "Head rotation [rad]": 0.0,
+            "Head restraint moment [kN-m]": 216.503099,
+            "Max displacement [mm]": 1.526525,
+            "Max moment [kN-m]": 478.646105,
+            "z @ max moment [m]": 7.0,
+            "Max shear [kN]": 88.551062,
+            "Reaction balance error [kN]": 0.0,
+        },
+    },
+    {
+        "Case ID": "V3-KTHETA-MED",
+        "Description": "Round pile, uniform soil, rotational spring Ktheta = 100,000",
+        "Pile Type": "Round", "D": 1.0, "B": 1.0, "Hsec": 1.0, "fc": 35.0,
+        "L": 20.0, "dL": 1.0, "kh": 15000.0, "Hload": 100.0,
+        "Axis": "X", "Head Condition": "Rotational Spring", "Ktheta": 100000.0,
+        "Expected": {
+            "Head displacement [mm]": 2.648742,
+            "Head rotation [rad]": -0.000518,
+            "Head restraint moment [kN-m]": 51.833763,
+            "Max displacement [mm]": 2.648742,
+            "Max moment [kN-m]": 211.307090,
+            "z @ max moment [m]": 4.0,
+            "Max shear [kN]": 80.134435,
+            "Reaction balance error [kN]": 0.0,
+        },
+    },
+    {
+        "Case ID": "V4-STM-LIKE",
+        "Description": "Round pile, STM-like imported head shear, fixed head",
+        "Pile Type": "Round", "D": 1.0, "B": 1.0, "Hsec": 1.0, "fc": 35.0,
+        "L": 25.0, "dL": 1.0, "kh": 20000.0, "Hload": 60.0,
+        "Axis": "X", "Head Condition": "Fixed Head (theta = 0)", "Ktheta": 0.0,
+        "Expected": {
+            "Head displacement [mm]": 0.738056,
+            "Head rotation [rad]": 0.0,
+            "Head restraint moment [kN-m]": 120.702227,
+            "Max displacement [mm]": 0.738056,
+            "Max moment [kN-m]": 266.809241,
+            "z @ max moment [m]": 6.0,
+            "Max shear [kN]": 52.619442,
+            "Reaction balance error [kN]": 0.0,
+        },
+    },
+    {
+        "Case ID": "V5-RECT-X",
+        "Description": "Rectangular pile, X-load direction, high rotational restraint",
+        "Pile Type": "Square", "D": 0.8, "B": 0.6, "Hsec": 0.8, "fc": 35.0,
+        "L": 18.0, "dL": 1.0, "kh": 18000.0, "Hload": 80.0,
+        "Axis": "X", "Head Condition": "Rotational Spring", "Ktheta": 1000000.0,
+        "Expected": {
+            "Head displacement [mm]": 2.334803,
+            "Head rotation [rad]": -0.000123,
+            "Head restraint moment [kN-m]": 123.158518,
+            "Max displacement [mm]": 2.334803,
+            "Max moment [kN-m]": 278.918251,
+            "z @ max moment [m]": 5.0,
+            "Max shear [kN]": 67.392066,
+            "Reaction balance error [kN]": 0.0,
+        },
+    },
+]
+
+
+def run_verification_case(case, tolerance_pct=1.0):
+    """Run one benchmark case and return a metric-by-metric comparison table."""
+    L = float(case["L"])
+    dL = float(case["dL"])
+    depths = np.arange(0.0, L + 1e-9, dL)
+    pile_type_for_props = "Round" if case["Pile Type"] == "Round" else "Square"
+    Ap_v, Ipx_v, Ipy_v, Ep_v, Deq_x_v, Deq_y_v = calc_pile_props(
+        pile_type_for_props,
+        float(case["D"]),
+        float(case.get("B", case["D"])),
+        float(case.get("Hsec", case["D"])),
+        float(case["fc"]),
+    )
+    if str(case.get("Axis", "X")).upper() == "X":
+        Ip = Ipy_v
+        Deq = Deq_x_v
+    else:
+        Ip = Ipx_v
+        Deq = Deq_y_v
+    spring_k = float(case["kh"]) * Deq * calc_tributary_lengths(depths, L)
+    y, theta, reactions, shear, moment, head_restraint = solve_pile_lateral_response(
+        depths,
+        spring_k,
+        Ep_v * Ip,
+        head_shear=float(case["Hload"]),
+        head_moment=0.0,
+        head_condition=case["Head Condition"],
+        rotational_stiffness=float(case.get("Ktheta", 0.0)),
+    )
+    i_m = int(np.argmax(np.abs(moment))) if len(moment) else 0
+    actual = {
+        "Head displacement [mm]": float(y[0] * 1000.0),
+        "Head rotation [rad]": float(theta[0]),
+        "Head restraint moment [kN-m]": float(head_restraint),
+        "Max displacement [mm]": float(np.max(np.abs(y)) * 1000.0),
+        "Max moment [kN-m]": float(np.max(np.abs(moment))),
+        "z @ max moment [m]": float(depths[i_m]),
+        "Max shear [kN]": float(np.max(np.abs(shear))),
+        "Reaction balance error [kN]": float(float(case["Hload"]) - np.sum(reactions)),
+    }
+    rows = []
+    expected = case.get("Expected", {})
+    for metric, exp_val in expected.items():
+        act_val = float(actual.get(metric, np.nan))
+        exp_val = float(exp_val)
+        # Depth index and zero-balance checks need a small absolute tolerance;
+        # response quantities use the relative tolerance selected by the user.
+        if metric.startswith("z @"):
+            tol = 0.001
+        elif abs(exp_val) <= 1e-9:
+            tol = 1e-5
+        else:
+            tol = max(1e-5, abs(exp_val) * float(tolerance_pct) / 100.0)
+        diff = act_val - exp_val
+        status = "OK" if abs(diff) <= tol else "NG"
+        rows.append({
+            "Case ID": case["Case ID"],
+            "Description": case["Description"],
+            "Metric": metric,
+            "Actual": act_val,
+            "Expected baseline": exp_val,
+            "Difference": diff,
+            "Tolerance": tol,
+            "Status": status,
+        })
+    return pd.DataFrame(rows)
+
+
+def run_verification_suite(tolerance_pct=1.0):
+    """Run all benchmark cases and return summary and detail tables."""
+    detail_frames = [run_verification_case(case, tolerance_pct) for case in VERIFICATION_BENCHMARKS]
+    detail_df = pd.concat(detail_frames, ignore_index=True) if detail_frames else pd.DataFrame()
+    if detail_df.empty:
+        return pd.DataFrame(), detail_df
+    summary = []
+    for case_id, grp in detail_df.groupby("Case ID", sort=False):
+        n_total = int(len(grp))
+        n_ok = int((grp["Status"] == "OK").sum())
+        max_abs_diff = float(grp["Difference"].abs().max())
+        status = "OK" if n_ok == n_total else "NG"
+        desc = str(grp["Description"].iloc[0])
+        summary.append({
+            "Case ID": case_id,
+            "Description": desc,
+            "Checks OK": n_ok,
+            "Checks Total": n_total,
+            "Max |Difference|": max_abs_diff,
+            "Status": status,
+        })
+    return pd.DataFrame(summary), detail_df
+
+
+def verification_cases_dataframe():
+    """Return benchmark case definitions without the embedded expected dictionary."""
+    rows = []
+    for case in VERIFICATION_BENCHMARKS:
+        rows.append({
+            "Case ID": case["Case ID"],
+            "Description": case["Description"],
+            "Pile Type": case["Pile Type"],
+            "D [m]": case["D"],
+            "B [m]": case.get("B", case["D"]),
+            "H [m]": case.get("Hsec", case["D"]),
+            "fc [MPa]": case["fc"],
+            "L [m]": case["L"],
+            "dL [m]": case["dL"],
+            "uniform kh [kN/m3]": case["kh"],
+            "Head shear [kN]": case["Hload"],
+            "Axis": case["Axis"],
+            "Head Condition": case["Head Condition"],
+            "Ktheta [kN-m/rad]": case.get("Ktheta", 0.0),
+        })
+    return pd.DataFrame(rows)
+
+
+def build_verification_markdown_report(summary_df, detail_df, tolerance_pct):
+    """Build a compact markdown verification report."""
+    lines = []
+    lines.append("# Pile Soil Spring Verification Benchmark Report")
+    lines.append("")
+    lines.append(f"Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"App version: {VERSION}")
+    lines.append(f"Tolerance: ±{float(tolerance_pct):.2f}% for response quantities")
+    lines.append("")
+    overall = "OK" if len(summary_df) and (summary_df["Status"] == "OK").all() else "NG"
+    lines.append(f"Overall verification status: **{overall}**")
+    lines.append("")
+    lines.append("## Benchmark Cases")
+    lines.append(_df_to_markdown_table(verification_cases_dataframe(), max_rows=20))
+    lines.append("")
+    lines.append("## Summary")
+    lines.append(_df_to_markdown_table(summary_df, max_rows=20))
+    lines.append("")
+    lines.append("## Detailed Metric Checks")
+    lines.append(_df_to_markdown_table(detail_df, max_rows=120))
+    lines.append("")
+    lines.append("## QA Notes")
+    lines.append("- These benchmarks are regression checks against the current internal solver implementation.")
+    lines.append("- They are not independent external validation against LPILE, PLAXIS, SAP2000/CSI, or field load-test data.")
+    lines.append("- If a future code change causes NG status, review whether the change is intentional engineering improvement or an unintended regression.")
+    return "\n".join(lines)
+
+
+def build_verification_workbook(summary_df, detail_df, tolerance_pct):
+    """Build an Excel workbook for verification results."""
+    try:
+        import xlsxwriter  # noqa: F401
+    except Exception as exc:
+        raise RuntimeError("xlsxwriter is required to export verification workbook. Install it with: pip install xlsxwriter") from exc
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        wb = writer.book
+        fmt_title = wb.add_format({"bold": True, "font_size": 14, "font_color": "#1F4E79"})
+        fmt_note = wb.add_format({"italic": True, "font_color": "#666666"})
+        cases_df = verification_cases_dataframe()
+        cases_df.to_excel(writer, sheet_name="Benchmark_Cases", index=False, startrow=3)
+        ws = writer.sheets["Benchmark_Cases"]
+        ws.write(0, 0, "Verification Benchmark Case Definitions", fmt_title)
+        ws.write(1, 0, f"Tolerance: ±{float(tolerance_pct):.2f}% for response quantities", fmt_note)
+        ws.set_column(0, len(cases_df.columns) - 1, 18)
+        summary_df.to_excel(writer, sheet_name="Verification_Summary", index=False, startrow=3)
+        ws = writer.sheets["Verification_Summary"]
+        ws.write(0, 0, "Verification Summary", fmt_title)
+        ws.set_column(0, len(summary_df.columns) - 1, 20)
+        detail_df.to_excel(writer, sheet_name="Detailed_Metrics", index=False, startrow=3)
+        ws = writer.sheets["Detailed_Metrics"]
+        ws.write(0, 0, "Detailed Metric-by-Metric Checks", fmt_title)
+        ws.set_column(0, len(detail_df.columns) - 1, 20)
+    return buf.getvalue()
+
 st.sidebar.title("Pile Spring Calculator")
 st.sidebar.caption(f"version {VERSION}")
 
@@ -2491,9 +2759,10 @@ Ap, Ipx, Ipy, Ep, Deq_x, Deq_y = calc_pile_props("Round" if pile_is_round else "
 st.title("Pile Lateral Soil Spring Stiffness Calculator")
 st.caption("Units: kN, m  |  Methods: JRA / Terzaghi 1955 / Vesic 1961 / Broms 1964")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "Input & Pile Section", "Results & Profile", "kh & Spring Plots",
-    "Pile Design", "N-SPT Reference", "Formulas & References", "Report / QA"
+    "Pile Design", "N-SPT Reference", "Formulas & References", "Report / QA",
+    "Verification"
 ])
 
 with tab1:
@@ -4523,3 +4792,87 @@ with tab7:
                 st.dataframe(sensitivity_df, use_container_width=True, hide_index=True)
             else:
                 st.info("Head-boundary sensitivity was not run for the latest design calculation.")
+
+with tab8:
+    st.subheader("Verification / Benchmark")
+    st.caption(
+        "Regression benchmark checks for the lateral-response solver and pile-head boundary conditions. "
+        "These tests help detect accidental calculation changes after future code edits."
+    )
+    st.warning(
+        "These benchmarks compare the app against locked internal baseline values. "
+        "They are not a substitute for independent validation against LPILE/FEA or pile load-test data."
+    )
+
+    st.markdown("### Benchmark Cases")
+    st.dataframe(verification_cases_dataframe(), use_container_width=True, hide_index=True, height=240)
+
+    ctol, crun = st.columns([1, 2])
+    with ctol:
+        verification_tol = st.number_input(
+            "Tolerance for response quantities [%]",
+            min_value=0.10,
+            max_value=10.0,
+            value=1.0,
+            step=0.10,
+            help="Default 1% is intended for regression checks. Depth and zero-balance metrics use small absolute tolerances.",
+        )
+    with crun:
+        st.markdown(" ")
+        st.markdown(" ")
+        run_verification = st.button("Run Verification Benchmarks", type="primary", use_container_width=True)
+
+    if run_verification:
+        summary_df, detail_df = run_verification_suite(verification_tol)
+        st.session_state["latest_verification_summary"] = summary_df
+        st.session_state["latest_verification_detail"] = detail_df
+        st.session_state["latest_verification_tol"] = verification_tol
+
+    summary_df = st.session_state.get("latest_verification_summary", pd.DataFrame())
+    detail_df = st.session_state.get("latest_verification_detail", pd.DataFrame())
+    verification_tol = st.session_state.get("latest_verification_tol", verification_tol)
+
+    if summary_df is None or len(summary_df) == 0:
+        st.info("Click **Run Verification Benchmarks** to execute the benchmark suite.")
+    else:
+        overall_ok = bool((summary_df["Status"] == "OK").all())
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Overall Status", "OK" if overall_ok else "NG")
+        m2.metric("Benchmark Cases", f"{len(summary_df)}")
+        m3.metric("Tolerance", f"±{float(verification_tol):.2f}%")
+
+        if overall_ok:
+            st.success("All benchmark checks passed against the locked baseline values.")
+        else:
+            st.error("One or more benchmark checks failed. Review whether this is an intended engineering change or an unintended regression.")
+
+        st.markdown("### Verification Summary")
+        st.dataframe(summary_df, use_container_width=True, hide_index=True, height=240)
+
+        st.markdown("### Detailed Metric Checks")
+        st.dataframe(detail_df, use_container_width=True, hide_index=True, height=420)
+
+        md_report = build_verification_markdown_report(summary_df, detail_df, verification_tol)
+        dlv1, dlv2 = st.columns(2)
+        dlv1.download_button(
+            "Download Verification Report (.md)",
+            data=md_report.encode("utf-8"),
+            file_name=f"PileSoilSpring_Verification_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+        try:
+            verification_xlsx = build_verification_workbook(summary_df, detail_df, verification_tol)
+            dlv2.download_button(
+                "Download Verification Workbook (.xlsx)",
+                data=verification_xlsx,
+                file_name=f"PileSoilSpring_Verification_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        except RuntimeError as exc:
+            dlv2.error(str(exc))
+
+        with st.expander("Preview verification markdown report", expanded=False):
+            st.markdown(md_report)
+
