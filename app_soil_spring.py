@@ -65,7 +65,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-VERSION = 24  # E.3: head-boundary sensitivity check
+VERSION = 25  # R.2: professional report / QA traceability
 
 #  CONSTANTS
 WIDGET_KEYS = [
@@ -2090,6 +2090,148 @@ def build_excel(df_results, df_row_results, df_soil, N_tip, Kv_tip, kv_tip, D_ti
 
     buf.seek(0)
     return buf.read()
+
+
+def _df_to_markdown_table(df, max_rows=40):
+    """Small dependency-free markdown table formatter for report export."""
+    if df is None or len(df) == 0:
+        return "_No data available._"
+    view = df.copy()
+    truncated = len(view) > max_rows
+    if truncated:
+        view = view.head(max_rows).copy()
+    view = view.fillna("")
+    cols = [str(c) for c in view.columns]
+    lines = ["| " + " | ".join(cols) + " |", "| " + " | ".join(["---"] * len(cols)) + " |"]
+    for _, row in view.iterrows():
+        vals = []
+        for val in row.tolist():
+            if isinstance(val, (float, np.floating)):
+                vals.append(f"{float(val):,.3f}".rstrip("0").rstrip("."))
+            else:
+                vals.append(str(val).replace("\n", " ").replace("|", "/"))
+        lines.append("| " + " | ".join(vals) + " |")
+    if truncated:
+        lines.append(f"\n_Note: table truncated to first {max_rows} rows in markdown preview._")
+    return "\n".join(lines)
+
+
+def build_pile_design_markdown_report(report):
+    """Build a clean markdown QA/design summary from the latest pile-design run."""
+    if not report:
+        return "No pile design report is available. Run pile design first."
+    meta = report.get("meta", {})
+    inputs = report.get("inputs", {})
+    summary = report.get("summary", {})
+    demand_df = report.get("demand_df", pd.DataFrame())
+    load_cases = report.get("load_cases", pd.DataFrame())
+    sensitivity_df = report.get("sensitivity_df", pd.DataFrame())
+
+    lines = []
+    lines.append("# Pile Lateral Soil Spring Design Report")
+    lines.append("")
+    lines.append(f"**Generated:** {meta.get('timestamp', '-')}  ")
+    lines.append(f"**App Version:** {meta.get('app_version', '-')}  ")
+    lines.append(f"**Load-case source:** {meta.get('load_case_source', 'Manual / in-app table')}  ")
+    lines.append("")
+    lines.append("## 1. Engineering Assumptions")
+    lines.append(f"- kh method: **{inputs.get('kh_method', '-')}**")
+    lines.append(f"- Design stage: **{inputs.get('design_stage', '-')}**")
+    lines.append(f"- Spring source: **{inputs.get('spring_source', '-')}**")
+    lines.append(f"- Head condition: **{inputs.get('head_condition', '-')}**")
+    lines.append(f"- Ktheta head: **{inputs.get('ktheta_head', 0.0):,.0f} kN-m/rad**")
+    lines.append(f"- Water table: **{inputs.get('water_table', 0.0):.2f} m**; scour depth: **{inputs.get('scour_depth', 0.0):.2f} m**")
+    lines.append("- PMM check: preliminary ACI-style strain-compatible phi-PMM surface with uplift/tension steel check.")
+    lines.append("- Fixed Head solves the head reaction moment internally; do not double-count external pile-head moment from another model.")
+    lines.append("")
+    lines.append("## 2. Pile and Reinforcement")
+    lines.append(f"- Pile type: **{inputs.get('pile_type', '-')}**")
+    lines.append(f"- D/B/H/L: **D={inputs.get('D', 0.0):.2f} m, B={inputs.get('B', 0.0):.2f} m, H={inputs.get('H', 0.0):.2f} m, L={inputs.get('L', 0.0):.2f} m**")
+    lines.append(f"- fc: **{inputs.get('fc', 0.0):.1f} MPa**")
+    lines.append(f"- Main reinforcement: **{inputs.get('main_bar', '-')}**, provided As = **{summary.get('as_provided_mm2', 0.0):,.0f} mm2**")
+    lines.append(f"- Transverse reinforcement: **{inputs.get('tie_bar', '-')} @ {inputs.get('tie_spacing_mm', 0.0):.0f} mm**, system = **{inputs.get('transverse_system', '-')}**")
+    lines.append("")
+    lines.append("## 3. Load Cases Used")
+    lines.append(_df_to_markdown_table(load_cases, max_rows=60))
+    lines.append("")
+    lines.append("## 4. Governing Design Summary")
+    lines.append(f"- Governing load case: **{summary.get('governing_case', '-')}**")
+    lines.append(f"- Max Pu: **{summary.get('overall_pu_max', 0.0):,.1f} kN**")
+    lines.append(f"- Min Pu: **{summary.get('overall_pu_min', 0.0):,.1f} kN**")
+    lines.append(f"- Max |Mux|: **{summary.get('overall_mx', 0.0):,.1f} kN-m**")
+    lines.append(f"- Max |Muy|: **{summary.get('overall_my', 0.0):,.1f} kN-m**")
+    lines.append(f"- Max |V|: **{summary.get('overall_v', 0.0):,.1f} kN**")
+    lines.append(f"- PMM utilization: **{summary.get('max_pmm_util', 0.0):.3f}**")
+    lines.append(f"- Tension utilization: **{summary.get('max_tension_util', 0.0):.3f}**")
+    lines.append(f"- Overall utilization: **{summary.get('max_util', 0.0):.3f}**")
+    lines.append(f"- Overall status: **{summary.get('overall_status', '-')}**")
+    lines.append("")
+    lines.append("## 5. Load Case Result Table")
+    lines.append(_df_to_markdown_table(demand_df.drop(columns=["Case Plot Label"], errors="ignore"), max_rows=80))
+    lines.append("")
+    lines.append("## 6. Head Boundary Sensitivity")
+    if sensitivity_df is not None and len(sensitivity_df) > 0:
+        lines.append("The table below brackets pile-head restraint uncertainty. Use it to judge whether free-head displacement or fixed/semi-fixed bending governs.")
+        lines.append(_df_to_markdown_table(sensitivity_df, max_rows=80))
+    else:
+        lines.append("_Sensitivity was not run for the latest design calculation._")
+    lines.append("")
+    lines.append("## 7. Limitations / QA Notes")
+    lines.append("- This report is generated from the latest in-app calculation state. Re-run pile design after changing input data.")
+    lines.append("- Pile structural design is preliminary and must be reviewed against the governing project code, detailing, anchorage, constructability, geotechnical axial capacity, and uplift requirements.")
+    lines.append("- Soil spring stiffness is only as reliable as the input soil profile and selected kh method.")
+    lines.append("- For final work, keep this report with the exported spring workbook and the source pile-cap STM transfer file.")
+    return "\n".join(lines)
+
+
+def build_pile_design_report_xlsx(report):
+    """Build an Excel QA workbook for the latest pile design run."""
+    try:
+        import xlsxwriter  # noqa: F401
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("Missing Excel export dependency: XlsxWriter. Install project requirements first.") from exc
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        wb = writer.book
+        fmt_title = wb.add_format({'bold': True, 'font_size': 13, 'bg_color': '#1a4f8a', 'font_color': 'white', 'border': 1})
+        fmt_header = wb.add_format({'bold': True, 'bg_color': '#BDD7EE', 'border': 1, 'align': 'center'})
+        fmt_note = wb.add_format({'italic': True, 'font_color': '#555555'})
+        meta = report.get("meta", {}) if report else {}
+        inputs = report.get("inputs", {}) if report else {}
+        summary = report.get("summary", {}) if report else {}
+        summary_rows = []
+        for k, v in meta.items():
+            summary_rows.append({"Group": "Meta", "Item": k, "Value": v})
+        for k, v in inputs.items():
+            summary_rows.append({"Group": "Input", "Item": k, "Value": v})
+        for k, v in summary.items():
+            summary_rows.append({"Group": "Summary", "Item": k, "Value": v})
+        pd.DataFrame(summary_rows).to_excel(writer, sheet_name="QA_Summary", index=False, startrow=3)
+        ws = writer.sheets["QA_Summary"]
+        ws.write(0, 0, "Pile Soil Spring Design QA Report", fmt_title)
+        ws.write(1, 0, "Generated from latest in-app pile design run. Re-run calculation after input changes.", fmt_note)
+        for ci, col in enumerate(["Group", "Item", "Value"]):
+            ws.write(3, ci, col, fmt_header)
+        ws.set_column(0, 0, 16); ws.set_column(1, 1, 34); ws.set_column(2, 2, 42)
+        sheet_map = {
+            "Load_Cases": report.get("load_cases", pd.DataFrame()) if report else pd.DataFrame(),
+            "Design_Demands": report.get("demand_df", pd.DataFrame()) if report else pd.DataFrame(),
+            "Force_Profile": report.get("profile_df", pd.DataFrame()) if report else pd.DataFrame(),
+            "Head_Sensitivity": report.get("sensitivity_df", pd.DataFrame()) if report else pd.DataFrame(),
+        }
+        for sheet, df in sheet_map.items():
+            safe_df = df.copy() if df is not None else pd.DataFrame()
+            if safe_df.empty:
+                safe_df = pd.DataFrame([{"Note": "No data available for this sheet."}])
+            safe_df.to_excel(writer, sheet_name=sheet[:31], index=False, startrow=1)
+            ws = writer.sheets[sheet[:31]]
+            ws.write(0, 0, sheet.replace("_", " "), fmt_title)
+            for ci, col in enumerate(safe_df.columns):
+                ws.write(1, ci, col, fmt_header)
+                ws.set_column(ci, ci, max(14, min(30, len(str(col)) + 4)))
+    buf.seek(0)
+    return buf.getvalue()
+
 st.sidebar.title("Pile Spring Calculator")
 st.sidebar.caption(f"version {VERSION}")
 
@@ -2221,9 +2363,9 @@ Ap, Ipx, Ipy, Ep, Deq_x, Deq_y = calc_pile_props("Round" if pile_is_round else "
 st.title("Pile Lateral Soil Spring Stiffness Calculator")
 st.caption("Units: kN, m  |  Methods: JRA / Terzaghi 1955 / Vesic 1961 / Broms 1964")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "Input & Pile Section", "Results & Profile", "kh & Spring Plots",
-    "Pile Design", "N-SPT Reference", "Formulas & References"
+    "Pile Design", "N-SPT Reference", "Formulas & References", "Report / QA"
 ])
 
 with tab1:
@@ -3295,6 +3437,59 @@ with tab4:
                     )
                     tie_ok = float(tie_spacing_mm) <= float(shear_summary["s_rec_mm"]) + 1e-9
 
+                    # Store latest design run for Report / QA tab. This does not affect calculation results.
+                    latest_report = {
+                        "meta": {
+                            "timestamp": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "app_version": VERSION,
+                            "load_case_source": st.session_state.get("pile_design_load_case_source", "Manual / in-app table"),
+                        },
+                        "inputs": {
+                            "kh_method": method,
+                            "design_stage": design_stage,
+                            "spring_source": spring_source,
+                            "x_design_row": int(x_design_row),
+                            "y_design_row": int(y_design_row),
+                            "head_condition": head_condition,
+                            "ktheta_head": float(ktheta_head),
+                            "pile_type": pile_type,
+                            "D": float(D),
+                            "B": float(B),
+                            "H": float(H),
+                            "L": float(L),
+                            "fc": float(fc),
+                            "node_spacing": float(node_spacing),
+                            "water_table": float(water_table),
+                            "scour_depth": float(scour_depth),
+                            "main_bar": main_bar,
+                            "tie_bar": tie_bar,
+                            "tie_spacing_mm": float(tie_spacing_mm),
+                            "transverse_system": transverse_system,
+                        },
+                        "summary": {
+                            "governing_case": str(governing["Load Case"]) if governing is not None else "-",
+                            "overall_pu_max": float(overall_pu_max),
+                            "overall_pu_min": float(overall_pu_min),
+                            "overall_mx": float(overall_mx),
+                            "overall_my": float(overall_my),
+                            "overall_v": float(overall_v),
+                            "overall_m_resultant_envelope": float(overall_m),
+                            "max_pmm_util": float(max_pmm_util),
+                            "max_tension_util": float(max_tension_util),
+                            "max_util": float(max_util),
+                            "overall_status": "OK" if max_util <= 1.0 else "NG",
+                            "as_provided_mm2": float(bar_df["As_mm2"].sum()),
+                            "phi_tn_kN": float(phi_tn_kN),
+                            "recommended_tie_spacing_mm": float(shear_summary["s_rec_mm"]),
+                            "provided_tie_spacing_ok": bool(tie_ok),
+                        },
+                        "load_cases": active_cases.copy(),
+                        "demand_df": demand_df.copy(),
+                        "profile_df": profile_df.copy(),
+                        "sensitivity_df": pd.DataFrame(),
+                    }
+                    st.session_state["latest_pile_design_report"] = latest_report
+
                     st.subheader("Design Envelope")
                     env1, env2, env3, env4, env5 = st.columns(5)
                     env1.metric("Max Pu [kN]", f"{overall_pu_max:,.1f}")
@@ -3502,6 +3697,8 @@ with tab4:
                             st.error(f"Head-boundary sensitivity could not run: {sensitivity_error}")
                         elif sensitivity_rows:
                             sensitivity_df = pd.DataFrame(sensitivity_rows)
+                            if "latest_pile_design_report" in st.session_state:
+                                st.session_state["latest_pile_design_report"]["sensitivity_df"] = sensitivity_df.copy()
                             if sensitivity_scope == "All active load cases":
                                 envelope_df = (
                                     sensitivity_df
@@ -4058,3 +4255,76 @@ with tab6:
 6. **FHWA-NHI-16-009** - *Design and Construction of Driven Pile Foundations*, Section 9.4.
 7. **Reese, L.C. & Van Impe, W.F. (2011)** - *Single Piles and Pile Groups Under Lateral Loading*.
 """)
+
+with tab7:
+    st.subheader("Report / QA")
+    st.caption(
+        "Professional traceability output for the latest Pile Design run. "
+        "Run / Update Pile Design first, then download the Markdown or Excel QA report."
+    )
+    report = st.session_state.get("latest_pile_design_report")
+    if not report:
+        st.info("No pile design report is available yet. Go to **Pile Design** and click **Run / Update Pile Design**.")
+        st.markdown(
+            """
+            The report will include:
+            - load-case source and assumptions
+            - kh method, spring source, and pile-head boundary condition
+            - governing pile design demands
+            - PMM / tension utilization summary
+            - head-boundary sensitivity results when available
+            - QA limitations and traceability notes
+            """
+        )
+    else:
+        summary = report.get("summary", {})
+        inputs = report.get("inputs", {})
+        meta = report.get("meta", {})
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Governing case", summary.get("governing_case", "-"))
+        c2.metric("Overall Util.", f"{float(summary.get('max_util', 0.0)):.3f}", summary.get("overall_status", "-"))
+        c3.metric("Head condition", inputs.get("head_condition", "-"))
+        c4.metric("Report timestamp", meta.get("timestamp", "-"))
+
+        st.markdown("### QA Summary")
+        qa_rows = []
+        for group_name, obj in (("Meta", meta), ("Input", inputs), ("Summary", summary)):
+            for k, v in obj.items():
+                qa_rows.append({"Group": group_name, "Item": k, "Value": v})
+        st.dataframe(pd.DataFrame(qa_rows), use_container_width=True, hide_index=True, height=300)
+
+        report_md = build_pile_design_markdown_report(report)
+        dl1, dl2 = st.columns(2)
+        dl1.download_button(
+            "Download QA Report (.md)",
+            data=report_md.encode("utf-8"),
+            file_name=f"PileSoilSpring_QA_Report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+        try:
+            report_xlsx = build_pile_design_report_xlsx(report)
+            dl2.download_button(
+                "Download QA Workbook (.xlsx)",
+                data=report_xlsx,
+                file_name=f"PileSoilSpring_QA_Workbook_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        except RuntimeError as e:
+            dl2.error(str(e))
+
+        with st.expander("Preview Markdown report", expanded=False):
+            st.markdown(report_md)
+
+        with st.expander("Data included in QA workbook", expanded=False):
+            st.write("**Load cases**")
+            st.dataframe(report.get("load_cases", pd.DataFrame()), use_container_width=True, hide_index=True)
+            st.write("**Design demands**")
+            st.dataframe(report.get("demand_df", pd.DataFrame()).drop(columns=["Case Plot Label"], errors="ignore"), use_container_width=True, hide_index=True)
+            sensitivity_df = report.get("sensitivity_df", pd.DataFrame())
+            if sensitivity_df is not None and len(sensitivity_df) > 0:
+                st.write("**Head-boundary sensitivity**")
+                st.dataframe(sensitivity_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("Head-boundary sensitivity was not run for the latest design calculation.")
